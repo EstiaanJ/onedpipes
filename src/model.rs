@@ -324,6 +324,13 @@ where
         self.external_controls.clear();
     }
 
+    /// Largest timestep the model's own CFL condition allows, i.e. what
+    /// [`Model::step`] would use. Exposed so callers driving `step_with_dt`
+    /// with external substepping can respect the same stability limit.
+    pub fn stable_timestep(&self) -> f64 {
+        self.global_timestep()
+    }
+
     pub fn step(&mut self) -> StepReport {
         let dt = self.global_timestep();
         self.step_with_dt(dt)
