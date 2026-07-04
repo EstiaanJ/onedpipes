@@ -5,8 +5,12 @@ use crate::{
         BoundaryCondition, ClosedEnd, DuctEnd, JunctionPort, JunctionSolution, MultiPipeJunction,
         OpenEnd, OrificeFlow, ValveOrifice,
     },
-    duct::{BoundaryOverride, Duct, DuctConfig, StepReport},
+    duct::{
+        BoundaryOverride, Duct, DuctConfig, ExternalBoundaryStepDiagnostic, PipeStepDiagnostic,
+        StepReport,
+    },
     gas_properties::GasProperties,
+    species::{SpeciesFractions, SpeciesMass},
     state::State,
 };
 
@@ -51,6 +55,7 @@ pub struct ExternalPort {
     pub end: DuctEnd,
     pub area: f64,
     pub state: State,
+    pub species: SpeciesFractions,
 }
 
 /// Boundary input supplied by an external 0D component.
@@ -65,6 +70,17 @@ pub enum ExternalBoundaryControl {
     Flow {
         mass_flow_out: f64,
         energy_flow_out: f64,
+    },
+    /// Supply a boundary flow with per-step transfer limits.
+    ///
+    /// Limits are integrated amounts over the next model step, not rates.
+    /// `inflow_species` is used when accepted flow enters the 1D pipe.
+    BoundedFlow {
+        mass_flow_out: f64,
+        energy_flow_out: f64,
+        max_mass_transfer: f64,
+        max_energy_transfer: f64,
+        inflow_species: SpeciesFractions,
     },
 }
 
@@ -182,6 +198,25 @@ where
         ))
     }
 
+    pub fn add_uniform_duct_with_species(
+        &mut self,
+        gas: G,
+        config: DuctConfig,
+        initial_state: State,
+        initial_species: SpeciesFractions,
+        left_boundary: ModelBoundary,
+        right_boundary: ModelBoundary,
+    ) -> PipeId {
+        self.add_duct(Duct::new_with_species(
+            gas,
+            config,
+            initial_state,
+            initial_species,
+            left_boundary,
+            right_boundary,
+        ))
+    }
+
     pub fn ducts(&self) -> &[Duct<G, ModelBoundary, ModelBoundary>] {
         &self.ducts
     }
@@ -202,12 +237,20 @@ where
         self.pipe(pipe_id).cells()
     }
 
+    pub fn pipe_species_cells(&self, pipe_id: PipeId) -> &[SpeciesFractions] {
+        self.pipe(pipe_id).species_cells()
+    }
+
     pub fn pipe_primitive_cells(&self, pipe_id: PipeId) -> Vec<crate::Primitive> {
         self.pipe(pipe_id).primitive_cells()
     }
 
     pub fn pipe_end_state(&self, pipe_end: PipeEnd) -> State {
         self.pipe(pipe_end.pipe_id).end_state(pipe_end.end)
+    }
+
+    pub fn pipe_end_species(&self, pipe_end: PipeEnd) -> SpeciesFractions {
+        self.pipe(pipe_end.pipe_id).end_species(pipe_end.end)
     }
 
     pub fn pipe_total_mass(&self, pipe_id: PipeId) -> f64 {
@@ -252,6 +295,7 @@ where
                     end: DuctEnd::Left,
                     area: duct.config().area,
                     state: duct.end_state(DuctEnd::Left),
+                    species: duct.end_species(DuctEnd::Left),
                 });
             }
             if let ModelBoundary::External { external_id } = duct.right_boundary() {
@@ -261,6 +305,7 @@ where
                     end: DuctEnd::Right,
                     area: duct.config().area,
                     state: duct.end_state(DuctEnd::Right),
+                    species: duct.end_species(DuctEnd::Right),
                 });
             }
         }
@@ -285,16 +330,47 @@ where
     }
 
     pub fn step_with_dt(&mut self, dt: f64) -> StepReport {
-        let boundary_overrides = self.boundary_overrides();
-        let mut total = StepReport::default();
-        for (duct, (left_override, right_override)) in
-            self.ducts.iter_mut().zip(boundary_overrides.into_iter())
+        let (boundary_overrides, mut total) = self.boundary_overrides(dt);
+        for (duct_index, (duct, (left_override, right_override))) in self
+            .ducts
+            .iter_mut()
+            .zip(boundary_overrides.into_iter())
+            .enumerate()
         {
-            let report = duct.step_with_boundary_controls(dt, left_override, right_override);
-            total.clipped_cells += report.clipped_cells;
-            total.fallback_faces += report.fallback_faces;
+            let mut report = duct.step_with_boundary_controls(dt, left_override, right_override);
+            if report.clipped_cells > 0 || report.fallback_faces > 0 {
+                report.pipe_diagnostics.push(PipeStepDiagnostic {
+                    pipe_index: duct_index,
+                    clipped_cell_indices: report.clipped_cell_indices.clone(),
+                    fallback_face_indices: report.fallback_face_indices.clone(),
+                });
+            }
+            total.absorb(report);
         }
         self.time += dt;
+        total
+    }
+
+    pub fn step_with_dt_and_external_callback<F>(
+        &mut self,
+        dt: f64,
+        substeps: usize,
+        mut callback: F,
+    ) -> StepReport
+    where
+        F: FnMut(ExternalPort) -> ExternalBoundaryControl,
+    {
+        assert!(substeps > 0);
+        let sub_dt = dt / substeps as f64;
+        let mut total = StepReport::default();
+        for _ in 0..substeps {
+            self.clear_external_boundary_controls();
+            for port in self.external_ports() {
+                let control = callback(port);
+                self.set_external_boundary_control(port.external_id, control);
+            }
+            total.absorb(self.step_with_dt(sub_dt));
+        }
         total
     }
 
@@ -322,9 +398,13 @@ where
         0.9 * self.cfl * min_dt
     }
 
-    fn boundary_overrides(&self) -> Vec<(BoundaryOverride, BoundaryOverride)> {
+    fn boundary_overrides(
+        &self,
+        dt: f64,
+    ) -> (Vec<(BoundaryOverride, BoundaryOverride)>, StepReport) {
         let mut overrides =
             vec![(BoundaryOverride::default(), BoundaryOverride::default()); self.ducts.len()];
+        let mut report = StepReport::default();
         for solved in self.solve_junctions() {
             for ((duct_index, end), boundary_state) in solved
                 .connections
@@ -334,11 +414,17 @@ where
                 match end {
                     DuctEnd::Left => {
                         assert!(overrides[duct_index].0.ghost_state.is_none());
-                        overrides[duct_index].0 = BoundaryOverride::ghost(boundary_state);
+                        overrides[duct_index].0 = BoundaryOverride::ghost_with_species(
+                            boundary_state,
+                            self.ducts[duct_index].end_species(end),
+                        );
                     }
                     DuctEnd::Right => {
                         assert!(overrides[duct_index].1.ghost_state.is_none());
-                        overrides[duct_index].1 = BoundaryOverride::ghost(boundary_state);
+                        overrides[duct_index].1 = BoundaryOverride::ghost_with_species(
+                            boundary_state,
+                            self.ducts[duct_index].end_species(end),
+                        );
                     }
                 }
             }
@@ -358,6 +444,13 @@ where
                 solved.flow.energy_flow,
                 gas,
             );
+            let first_species_flux = species_flux_from_outflow(
+                first.1,
+                first_area,
+                solved.flow.mass_flow,
+                self.ducts[first.0].end_species(first.1),
+                self.ducts[second.0].end_species(second.1),
+            );
             let second_flux = boundary_flux_from_outflow(
                 second_state,
                 second.1,
@@ -366,18 +459,35 @@ where
                 -solved.flow.energy_flow,
                 gas,
             );
+            let second_species_flux = species_flux_from_outflow(
+                second.1,
+                second_area,
+                -solved.flow.mass_flow,
+                self.ducts[second.0].end_species(second.1),
+                self.ducts[first.0].end_species(first.1),
+            );
 
-            set_flux_override(&mut overrides[first.0], first.1, first_state, first_flux);
+            set_flux_override(
+                &mut overrides[first.0],
+                first.1,
+                first_state,
+                self.ducts[first.0].end_species(first.1),
+                first_flux,
+                first_species_flux,
+            );
             set_flux_override(
                 &mut overrides[second.0],
                 second.1,
                 second_state,
+                self.ducts[second.0].end_species(second.1),
                 second_flux,
+                second_species_flux,
             );
         }
         for (duct_index, end, external_id) in self.external_connections() {
             let duct = &self.ducts[duct_index];
             let state = duct.end_state(end);
+            let species = duct.end_species(end);
             let control = self.external_controls.get(&external_id).unwrap_or_else(|| {
                 panic!(
                     "external boundary {:?} requires control before Model::step_with_dt",
@@ -386,7 +496,7 @@ where
             });
             let boundary_override = match *control {
                 ExternalBoundaryControl::GhostState(ghost_state) => {
-                    BoundaryOverride::ghost(ghost_state)
+                    BoundaryOverride::ghost_with_species(ghost_state, species)
                 }
                 ExternalBoundaryControl::Flow {
                     mass_flow_out,
@@ -400,7 +510,80 @@ where
                         energy_flow_out,
                         duct.gas(),
                     );
-                    BoundaryOverride::flux(state, face_flux)
+                    let species_flux = species_flux_from_outflow(
+                        end,
+                        duct.config().area,
+                        mass_flow_out,
+                        species,
+                        SpeciesFractions::AIR,
+                    );
+                    report
+                        .external_boundary_diagnostics
+                        .push(external_diagnostic(
+                            external_id,
+                            PipeId(duct_index),
+                            end,
+                            mass_flow_out,
+                            mass_flow_out,
+                            energy_flow_out,
+                            energy_flow_out,
+                            dt,
+                            species_transfer_from_outflow(
+                                mass_flow_out,
+                                species,
+                                SpeciesFractions::AIR,
+                                dt,
+                            ),
+                            false,
+                        ));
+                    BoundaryOverride::flux_with_species(state, species, face_flux, species_flux)
+                }
+                ExternalBoundaryControl::BoundedFlow {
+                    mass_flow_out,
+                    energy_flow_out,
+                    max_mass_transfer,
+                    max_energy_transfer,
+                    inflow_species,
+                } => {
+                    let (accepted_mass_flow_out, mass_limited) =
+                        limit_flow_rate(mass_flow_out, max_mass_transfer, dt);
+                    let (accepted_energy_flow_out, energy_limited) =
+                        limit_flow_rate(energy_flow_out, max_energy_transfer, dt);
+                    let face_flux = boundary_flux_from_outflow(
+                        state,
+                        end,
+                        duct.config().area,
+                        accepted_mass_flow_out,
+                        accepted_energy_flow_out,
+                        duct.gas(),
+                    );
+                    let species_flux = species_flux_from_outflow(
+                        end,
+                        duct.config().area,
+                        accepted_mass_flow_out,
+                        species,
+                        inflow_species,
+                    );
+                    report
+                        .external_boundary_diagnostics
+                        .push(external_diagnostic(
+                            external_id,
+                            PipeId(duct_index),
+                            end,
+                            mass_flow_out,
+                            accepted_mass_flow_out,
+                            energy_flow_out,
+                            accepted_energy_flow_out,
+                            dt,
+                            species_transfer_from_outflow(
+                                accepted_mass_flow_out,
+                                species,
+                                inflow_species,
+                                dt,
+                            ),
+                            mass_limited || energy_limited,
+                        ));
+                    BoundaryOverride::flux_with_species(state, species, face_flux, species_flux)
                 }
             };
             match end {
@@ -414,7 +597,7 @@ where
                 }
             }
         }
-        overrides
+        (overrides, report)
     }
 
     fn solve_junctions(&self) -> Vec<SolvedJunction> {
@@ -534,16 +717,28 @@ fn set_flux_override(
     overrides: &mut (BoundaryOverride, BoundaryOverride),
     end: DuctEnd,
     ghost_state: State,
+    ghost_species: SpeciesFractions,
     face_flux: State,
+    face_species_flux: SpeciesMass,
 ) {
     match end {
         DuctEnd::Left => {
             assert!(overrides.0.face_flux.is_none());
-            overrides.0 = BoundaryOverride::flux(ghost_state, face_flux);
+            overrides.0 = BoundaryOverride::flux_with_species(
+                ghost_state,
+                ghost_species,
+                face_flux,
+                face_species_flux,
+            );
         }
         DuctEnd::Right => {
             assert!(overrides.1.face_flux.is_none());
-            overrides.1 = BoundaryOverride::flux(ghost_state, face_flux);
+            overrides.1 = BoundaryOverride::flux_with_species(
+                ghost_state,
+                ghost_species,
+                face_flux,
+                face_species_flux,
+            );
         }
     }
 }
@@ -570,10 +765,80 @@ fn boundary_flux_from_outflow<G: GasProperties>(
     }
 }
 
+fn limit_flow_rate(flow_rate: f64, max_transfer: f64, dt: f64) -> (f64, bool) {
+    assert!(dt > 0.0);
+    let max_rate = max_transfer.abs() / dt;
+    if !max_rate.is_finite() {
+        return (flow_rate, false);
+    }
+    let accepted = flow_rate.clamp(-max_rate, max_rate);
+    (accepted, accepted != flow_rate)
+}
+
+fn species_flux_from_outflow(
+    end: DuctEnd,
+    area: f64,
+    mass_flow_out: f64,
+    pipe_species: SpeciesFractions,
+    inflow_species: SpeciesFractions,
+) -> SpeciesMass {
+    let coordinate_sign = match end {
+        DuctEnd::Left => -1.0,
+        DuctEnd::Right => 1.0,
+    };
+    let mass_flux = coordinate_sign * mass_flow_out / area;
+    if mass_flow_out >= 0.0 {
+        pipe_species.scale(mass_flux)
+    } else {
+        inflow_species.scale(mass_flux)
+    }
+}
+
+fn species_transfer_from_outflow(
+    mass_flow_out: f64,
+    pipe_species: SpeciesFractions,
+    inflow_species: SpeciesFractions,
+    dt: f64,
+) -> SpeciesMass {
+    if mass_flow_out >= 0.0 {
+        pipe_species.scale(mass_flow_out * dt)
+    } else {
+        inflow_species.scale(mass_flow_out * dt)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn external_diagnostic(
+    external_id: ExternalBoundaryId,
+    pipe_id: PipeId,
+    end: DuctEnd,
+    requested_mass_flow_out: f64,
+    accepted_mass_flow_out: f64,
+    requested_energy_flow_out: f64,
+    accepted_energy_flow_out: f64,
+    dt: f64,
+    species_transferred_out: SpeciesMass,
+    limited: bool,
+) -> ExternalBoundaryStepDiagnostic {
+    ExternalBoundaryStepDiagnostic {
+        external_id: external_id.0,
+        pipe_index: pipe_id.0,
+        end,
+        requested_mass_flow_out,
+        accepted_mass_flow_out,
+        requested_energy_flow_out,
+        accepted_energy_flow_out,
+        mass_transferred_out: accepted_mass_flow_out * dt,
+        energy_transferred_out: accepted_energy_flow_out * dt,
+        species_transferred_out,
+        limited,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Model, ModelBoundary};
-    use crate::{DuctEnd, GasProperties, ValveOrifice};
+    use crate::{DuctEnd, GasProperties, SpeciesFractions, ValveOrifice};
     use crate::{
         duct::DuctConfig,
         gas_properties::TemperatureDependentAir,
@@ -819,5 +1084,72 @@ mod tests {
 
         assert_eq!(report.clipped_cells, 0);
         assert_eq!(report.fallback_faces, 0);
+    }
+
+    #[test]
+    fn bounded_external_flow_reports_accepted_transfer_and_species() {
+        let gas = TemperatureDependentAir::new();
+        let state = State::from_primitive(1.2, 0.0, 101_325.0, gas);
+        let mut model = Model::new(0.5);
+        let pipe_id = model.add_uniform_duct_with_species(
+            gas,
+            DuctConfig::new(1.0, 8, 1.0),
+            state,
+            SpeciesFractions::AIR,
+            ModelBoundary::external(0),
+            ModelBoundary::Closed,
+        );
+        let exhaust = SpeciesFractions::EXHAUST;
+        model.set_external_boundary_control(
+            ExternalBoundaryId(0),
+            ExternalBoundaryControl::BoundedFlow {
+                mass_flow_out: -0.20,
+                energy_flow_out: -40_000.0,
+                max_mass_transfer: 1.0e-8,
+                max_energy_transfer: 2.0e-3,
+                inflow_species: exhaust,
+            },
+        );
+
+        let report = model.step_with_dt(1.0e-6);
+
+        assert_eq!(report.clipped_cells, 0);
+        assert_eq!(report.fallback_faces, 0);
+        assert_eq!(report.external_boundary_diagnostics.len(), 1);
+        let diagnostic = &report.external_boundary_diagnostics[0];
+        assert!(diagnostic.limited);
+        assert!((diagnostic.accepted_mass_flow_out + 0.01).abs() < 1.0e-12);
+        assert!((diagnostic.mass_transferred_out + 1.0e-8).abs() < 1.0e-14);
+        assert!(diagnostic.species_transferred_out.products < 0.0);
+        assert!(model.pipe_species_cells(pipe_id)[0].products > SpeciesFractions::AIR.products);
+    }
+
+    #[test]
+    fn external_callback_recomputes_controls_each_substep() {
+        let gas = TemperatureDependentAir::new();
+        let state = State::from_primitive(1.2, 0.0, 101_325.0, gas);
+        let mut model = Model::new(0.5);
+        model.add_uniform_duct(
+            gas,
+            DuctConfig::new(1.0, 8, 1.0),
+            state,
+            ModelBoundary::external(0),
+            ModelBoundary::Closed,
+        );
+        let mut calls = 0;
+
+        let report = model.step_with_dt_and_external_callback(4.0e-7, 4, |port| {
+            calls += 1;
+            let prim = port.state.primitive(gas);
+            ExternalBoundaryControl::Flow {
+                mass_flow_out: -1.0e-6 * (prim.p / 101_325.0),
+                energy_flow_out: 0.0,
+            }
+        });
+
+        assert_eq!(calls, 4);
+        assert_eq!(report.clipped_cells, 0);
+        assert_eq!(report.fallback_faces, 0);
+        assert_eq!(report.external_boundary_diagnostics.len(), 4);
     }
 }

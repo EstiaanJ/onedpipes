@@ -45,7 +45,7 @@ above and would add cost/complexity for no benefit:
 | Feature | Deferred because | Tracked in |
 |---|---|---|
 | MoC boundary treatment | Simple boundary models are enough to get a working model; MoC is an accuracy upgrade, not a functionality requirement | DECISIONS.md |
-| Multi-species transport (air, fuel vapor, inert/EGR, combustion products) | Adds a transport equation per species; not needed for the current goals | DECISIONS.md |
+| Thermodynamic multi-species gas model | Passive species are transported for engine diagnostics, but they do not yet feed `R`, `cp`, or `gamma`; full mixture thermodynamics is not needed for the current goals | DECISIONS.md |
 
 ## Testing strategy
 

@@ -70,16 +70,23 @@ Public functions:
   Adds a preconstructed duct with model-level boundary types.
 - `add_uniform_duct(gas, config, initial_state, left_boundary, right_boundary) -> PipeId`  
   Convenience constructor for a pipe initialized to one state.
+- `add_uniform_duct_with_species(gas, config, initial_state, initial_species, left_boundary, right_boundary) -> PipeId`  
+  Convenience constructor for a pipe initialized to one state and one
+  passive species composition.
 - `ducts()`, `ducts_mut()`  
   Low-level access to the stored ducts in insertion order.
 - `pipe(pipe_id)`, `pipe_mut(pipe_id)`  
   Access one pipe by stable `PipeId`.
 - `pipe_cells(pipe_id) -> &[State]`  
   Returns conservative cell states.
+- `pipe_species_cells(pipe_id) -> &[SpeciesFractions]`  
+  Returns passive species fractions in each cell.
 - `pipe_primitive_cells(pipe_id) -> Vec<Primitive>`  
   Returns derived primitive cell states.
 - `pipe_end_state(PipeEnd) -> State`  
   Returns the conservative state at a pipe end.
+- `pipe_end_species(PipeEnd) -> SpeciesFractions`  
+  Returns passive species fractions at a pipe end.
 - `pipe_total_mass(pipe_id) -> f64`, `pipe_total_energy(pipe_id) -> f64`  
   Return area-integrated inventories for one pipe.
 - `time() -> f64`  
@@ -88,6 +95,9 @@ Public functions:
   Advances by the global CFL time step.
 - `step_with_dt(dt) -> StepReport`  
   Advances by an explicit time step.
+- `step_with_dt_and_external_callback(dt, substeps, callback) -> StepReport`  
+  Advances by smaller pipe substeps. Before each substep, the callback
+  receives fresh `ExternalPort` snapshots and returns boundary controls.
 - `run_until(end_time) -> StepReport`  
   Advances until the requested model time.
 - `junction_diagnostics() -> Vec<JunctionDiagnostic>`  
@@ -129,10 +139,13 @@ by the embedding simulator.
   Stable identifier for a 0D coupling boundary.
 - `PipeEnd { pipe_id, end }`  
   Identifies one pipe end.
-- `ExternalPort { external_id, pipe_id, end, area, state }`  
-  Snapshot passed to external 0D code.
+- `ExternalPort { external_id, pipe_id, end, area, state, species }`  
+  Snapshot passed to external 0D code, including passive composition for
+  lambda/residual diagnostics.
 - `ExternalBoundaryControl`  
-  Either `GhostState(State)` or `Flow { mass_flow_out, energy_flow_out }`.
+  `GhostState(State)`, `Flow { mass_flow_out, energy_flow_out }`, or
+  `BoundedFlow { mass_flow_out, energy_flow_out, max_mass_transfer,
+  max_energy_transfer, inflow_species }`.
 
 ## Pipe and State Types
 
@@ -180,8 +193,22 @@ Per-step robustness counters:
 
 - `clipped_cells`
 - `fallback_faces`
+- `clipped_cell_indices`
+- `fallback_face_indices`
+- `pipe_diagnostics`
+- `external_boundary_diagnostics`
 
 Repeated nonzero values are a sign of a tuning, boundary, or grid issue.
+External diagnostics report requested and accepted flow, integrated
+mass/energy transfer, species transfer, and whether bounded-flow limits
+were active.
+
+### `SpeciesFractions`
+
+Passive composition for oxygen, fuel vapor, inert gas, and combustion
+products. `lambda(stoich_fuel_oxygen_ratio)` returns a host-side lambda
+estimate when fuel vapor is present. These species are transported for
+diagnostics and coupling; they do not yet alter the gas-property model.
 
 ## Boundary Models
 

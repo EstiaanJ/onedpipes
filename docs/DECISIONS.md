@@ -88,6 +88,33 @@ coupling surface.
 components internally. The embedding simulator owns ordering and must
 provide controls for every external boundary before stepping.
 
+**Upgrade added after engine integration**: external boundaries now also
+support bounded flow controls and callback-driven substep coupling. A
+bounded flow reports the accepted mass/energy transfer, limiting the
+request to explicit per-step caps so the host can conserve its 0D state
+against what the pipe actually accepted. The callback API lets the host
+recompute controls from fresh pipe-end snapshots during substeps of one
+larger engine step.
+
+**Tradeoff accepted**: this improves coupling robustness without adding
+first-class 0D reservoirs, cylinders, or valve schedules inside this
+crate. The host still owns chamber state, valve timing, and ordering.
+
+## Passive species carry-through for engine diagnostics
+
+**Decision**: ducts carry four passive species fractions: oxygen, fuel
+vapor, inert gas, and combustion products. They are advected as passive
+scalars with the mass flux and exposed in `ExternalPort` for host-side
+lambda, residual-gas, and scavenging diagnostics.
+
+**Why**: engine integration needs exhaust-port composition. Bulk gas
+properties alone cannot reconstruct lambda or residual composition.
+
+**Tradeoff accepted**: these species do not yet feed the thermodynamic
+gas model. Pressure, temperature, sound speed, and energy closure still
+use the single effective gas model. This is intentionally a diagnostic
+and transport upgrade, not a full multi-species thermochemistry model.
+
 ## Artificial dissipation: simplest possible (basic 2nd-difference / Lapidus-style)
 
 **Decision**: a single global scalar artificial-viscosity coefficient
@@ -111,20 +138,19 @@ accuracy.
 
 
 
-## Gas properties: temperature-dependent γ(T), cp(T), single species
+## Gas properties: temperature-dependent γ(T), cp(T), single effective gas
 
 **Decision**: model γ and cp as functions of temperature for a single
-effective gas, but do not implement multi-species transport yet.
+effective gas. Passive species are carried for diagnostics, but do not
+yet feed the gas-property closure.
 
 **Why**: explicitly flagged as important for accuracy
 
 
 **Upgrade path**: gas properties are behind a swappable interface
-(`get_gamma(T)`, `get_cp(T)`, `get_R()`) specifically so species mass
-fractions can later become additional advected scalars that feed these
-functions, without changing the interior LW solver. When implemented,
-each species is a passively-advected scalar riding in the same
-predictor/corrector update as ρ, ρu, ρE.
+(`get_gamma(T)`, `get_cp(T)`, `get_R()`) specifically so the existing
+species fractions can later feed mixture-averaged `R`/`cp` without
+changing the interior LW solver.
 
 ## Time stepping: global explicit Δt, CFL with 10% margin
 

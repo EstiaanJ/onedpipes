@@ -1,6 +1,7 @@
 use crate::{
     boundaries::{BoundaryCondition, DuctEnd},
     gas_properties::GasProperties,
+    species::{SpeciesFractions, SpeciesMass},
     state::{Primitive, State},
 };
 
@@ -34,30 +35,98 @@ impl DuctConfig {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct StepReport {
     pub clipped_cells: usize,
     pub fallback_faces: usize,
+    pub clipped_cell_indices: Vec<usize>,
+    pub fallback_face_indices: Vec<usize>,
+    pub pipe_diagnostics: Vec<PipeStepDiagnostic>,
+    pub external_boundary_diagnostics: Vec<ExternalBoundaryStepDiagnostic>,
+}
+
+impl StepReport {
+    pub fn absorb(&mut self, other: Self) {
+        self.clipped_cells += other.clipped_cells;
+        self.fallback_faces += other.fallback_faces;
+        self.clipped_cell_indices.extend(other.clipped_cell_indices);
+        self.fallback_face_indices
+            .extend(other.fallback_face_indices);
+        self.pipe_diagnostics.extend(other.pipe_diagnostics);
+        self.external_boundary_diagnostics
+            .extend(other.external_boundary_diagnostics);
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct PipeStepDiagnostic {
+    pub pipe_index: usize,
+    pub clipped_cell_indices: Vec<usize>,
+    pub fallback_face_indices: Vec<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExternalBoundaryStepDiagnostic {
+    pub external_id: usize,
+    pub pipe_index: usize,
+    pub end: DuctEnd,
+    pub requested_mass_flow_out: f64,
+    pub accepted_mass_flow_out: f64,
+    pub requested_energy_flow_out: f64,
+    pub accepted_energy_flow_out: f64,
+    pub mass_transferred_out: f64,
+    pub energy_transferred_out: f64,
+    pub species_transferred_out: SpeciesMass,
+    pub limited: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct BoundaryOverride {
     pub ghost_state: Option<State>,
+    pub ghost_species: Option<SpeciesFractions>,
     pub face_flux: Option<State>,
+    pub face_species_flux: Option<SpeciesMass>,
 }
 
 impl BoundaryOverride {
     pub fn ghost(ghost_state: State) -> Self {
         Self {
             ghost_state: Some(ghost_state),
+            ghost_species: None,
             face_flux: None,
+            face_species_flux: None,
+        }
+    }
+
+    pub fn ghost_with_species(ghost_state: State, ghost_species: SpeciesFractions) -> Self {
+        Self {
+            ghost_state: Some(ghost_state),
+            ghost_species: Some(ghost_species),
+            face_flux: None,
+            face_species_flux: None,
         }
     }
 
     pub fn flux(ghost_state: State, face_flux: State) -> Self {
         Self {
             ghost_state: Some(ghost_state),
+            ghost_species: None,
             face_flux: Some(face_flux),
+            face_species_flux: None,
+        }
+    }
+
+    pub fn flux_with_species(
+        ghost_state: State,
+        ghost_species: SpeciesFractions,
+        face_flux: State,
+        face_species_flux: SpeciesMass,
+    ) -> Self {
+        Self {
+            ghost_state: Some(ghost_state),
+            ghost_species: Some(ghost_species),
+            face_flux: Some(face_flux),
+            face_species_flux: Some(face_species_flux),
         }
     }
 }
@@ -72,6 +141,7 @@ where
     gas: G,
     config: DuctConfig,
     cells: Vec<State>,
+    species: Vec<SpeciesFractions>,
     left_boundary: L,
     right_boundary: R,
 }
@@ -92,6 +162,25 @@ where
         Self {
             gas,
             cells: vec![initial_state; config.cells],
+            species: vec![SpeciesFractions::AIR; config.cells],
+            config,
+            left_boundary,
+            right_boundary,
+        }
+    }
+
+    pub fn new_with_species(
+        gas: G,
+        config: DuctConfig,
+        initial_state: State,
+        initial_species: SpeciesFractions,
+        left_boundary: L,
+        right_boundary: R,
+    ) -> Self {
+        Self {
+            gas,
+            cells: vec![initial_state; config.cells],
+            species: vec![initial_species.normalized(); config.cells],
             config,
             left_boundary,
             right_boundary,
@@ -114,6 +203,7 @@ where
             .collect();
         Self {
             gas,
+            species: vec![SpeciesFractions::AIR; config.cells],
             config,
             cells,
             left_boundary,
@@ -131,6 +221,10 @@ where
 
     pub fn cells(&self) -> &[State] {
         &self.cells
+    }
+
+    pub fn species_cells(&self) -> &[SpeciesFractions] {
+        &self.species
     }
 
     pub fn left_boundary(&self) -> &L {
@@ -155,8 +249,19 @@ where
         }
     }
 
+    pub fn end_species(&self, end: DuctEnd) -> SpeciesFractions {
+        match end {
+            DuctEnd::Left => self.species[0],
+            DuctEnd::Right => self.species[self.species.len() - 1],
+        }
+    }
+
     pub fn set_cell(&mut self, index: usize, state: State) {
         self.cells[index] = state;
+    }
+
+    pub fn set_species(&mut self, index: usize, species: SpeciesFractions) {
+        self.species[index] = species.normalized();
     }
 
     pub fn total_mass(&self) -> f64 {
@@ -197,11 +302,15 @@ where
             dt,
             BoundaryOverride {
                 ghost_state: left_ghost,
+                ghost_species: None,
                 face_flux: None,
+                face_species_flux: None,
             },
             BoundaryOverride {
                 ghost_state: right_ghost,
+                ghost_species: None,
                 face_flux: None,
+                face_species_flux: None,
             },
         )
     }
@@ -215,7 +324,10 @@ where
         let dx = self.config.dx();
         let lambda = dt / dx;
         let extended = self.extended_states(left_boundary.ghost_state, right_boundary.ghost_state);
+        let extended_species =
+            self.extended_species(left_boundary.ghost_species, right_boundary.ghost_species);
         let mut face_fluxes = Vec::with_capacity(self.cells.len() + 1);
+        let mut face_species_fluxes = Vec::with_capacity(self.cells.len() + 1);
         let mut report = StepReport::default();
 
         for face in 0..=self.cells.len() {
@@ -228,25 +340,50 @@ where
                 );
                 if !self.is_physical(predicted) {
                     report.fallback_faces += 1;
+                    report.fallback_face_indices.push(face);
                     face_fluxes.push(self.rusanov_flux(left, right));
-                    continue;
+                } else {
+                    face_fluxes.push(predicted.flux(self.gas));
                 }
-                face_fluxes.push(predicted.flux(self.gas));
             } else {
                 report.fallback_faces += 1;
+                report.fallback_face_indices.push(face);
                 face_fluxes.push(self.rusanov_flux(left, right));
             }
+            let mass_flux = face_fluxes[face].rho;
+            face_species_fluxes.push(upwind_species_flux(
+                mass_flux,
+                extended_species[face],
+                extended_species[face + 1],
+            ));
         }
         if let Some(face_flux) = left_boundary.face_flux {
             face_fluxes[0] = face_flux;
+            face_species_fluxes[0] = left_boundary.face_species_flux.unwrap_or_else(|| {
+                upwind_species_flux(face_flux.rho, extended_species[0], extended_species[1])
+            });
         }
         if let Some(face_flux) = right_boundary.face_flux {
             let right_face = self.cells.len();
             face_fluxes[right_face] = face_flux;
+            face_species_fluxes[right_face] =
+                right_boundary.face_species_flux.unwrap_or_else(|| {
+                    upwind_species_flux(
+                        face_flux.rho,
+                        extended_species[right_face],
+                        extended_species[right_face + 1],
+                    )
+                });
         }
 
         let old_cells = self.cells.clone();
+        let old_species_mass: Vec<_> = old_cells
+            .iter()
+            .zip(self.species.iter().copied())
+            .map(|(state, species)| SpeciesMass::from_density(state.rho, species))
+            .collect();
         let mut next_cells = Vec::with_capacity(self.cells.len());
+        let mut next_species_mass = Vec::with_capacity(self.cells.len());
         for i in 0..self.cells.len() {
             let area_weighted_flux_delta = face_fluxes[i + 1]
                 .minus(face_fluxes[i])
@@ -254,6 +391,11 @@ where
             let next =
                 self.cells[i].add_scaled(area_weighted_flux_delta, -lambda / self.config.area);
             next_cells.push(next);
+            next_species_mass.push(
+                old_species_mass[i]
+                    .add_scaled(face_species_fluxes[i + 1], -lambda)
+                    .add_scaled(face_species_fluxes[i], lambda),
+            );
         }
 
         if self.config.artificial_viscosity > 0.0 {
@@ -266,12 +408,17 @@ where
             }
         }
 
-        for state in &mut next_cells {
+        for (index, state) in next_cells.iter_mut().enumerate() {
             if self.enforce_positivity(state) {
                 report.clipped_cells += 1;
+                report.clipped_cell_indices.push(index);
             }
         }
 
+        self.species = next_species_mass
+            .into_iter()
+            .map(SpeciesMass::fractions)
+            .collect();
         self.cells = next_cells;
         report
     }
@@ -290,6 +437,18 @@ where
                 self.gas,
             )
         }));
+        extended
+    }
+
+    fn extended_species(
+        &self,
+        left_ghost: Option<SpeciesFractions>,
+        right_ghost: Option<SpeciesFractions>,
+    ) -> Vec<SpeciesFractions> {
+        let mut extended = Vec::with_capacity(self.species.len() + 2);
+        extended.push(left_ghost.unwrap_or(self.species[0]));
+        extended.extend_from_slice(&self.species);
+        extended.push(right_ghost.unwrap_or(self.species[self.species.len() - 1]));
         extended
     }
 
@@ -330,6 +489,18 @@ where
             .plus(right.flux_clamped(self.gas))
             .scale(0.5)
             .add_scaled(right.minus(left), -0.5 * wave_speed)
+    }
+}
+
+fn upwind_species_flux(
+    mass_flux: f64,
+    left: SpeciesFractions,
+    right: SpeciesFractions,
+) -> SpeciesMass {
+    if mass_flux >= 0.0 {
+        left.scale(mass_flux)
+    } else {
+        right.scale(mass_flux)
     }
 }
 

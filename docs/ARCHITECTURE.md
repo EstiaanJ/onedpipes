@@ -86,7 +86,8 @@ how much artificial dissipation is needed — tune the two together.
 
 ## Gas properties
 
-- Single effective gas for v1 (no species transport yet).
+- Single effective gas for v1 thermodynamics. Passive species are carried
+  for diagnostics only; they do not yet change `R`, `cp`, or `γ`.
 - **Temperature-dependent γ(T) and cp(T)**: use a polynomial or table fit
   (e.g. NASA-polynomial-style or a simple piecewise-linear fit) valid
   over the intake-to-exhaust temperature range. Compute `a = sqrt(γ(T)·R·T)`
@@ -97,6 +98,16 @@ how much artificial dissipation is needed — tune the two together.
   swapping in a mixture-averaged multi-species version doesn't touch
   the interior solver — species mass fractions would just become
   additional advected scalars feeding `get_R`/`get_cp`.
+
+## Passive species diagnostics
+
+The solver carries passive fractions for oxygen, fuel vapor, inert gas,
+and combustion products so engine hosts can reconstruct exhaust lambda
+and residual composition at external ports. These scalars are advected
+with the boundary/interior mass flux and exposed through `ExternalPort`.
+They do not currently feed the gas-property closure above; this keeps the
+thermodynamic model single-effective-gas while preserving the upgrade
+path to mixture-averaged properties later.
 
 ## Wall heat transfer
 
