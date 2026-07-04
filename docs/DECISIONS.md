@@ -73,6 +73,21 @@ against the canonical reference problem. Temperature-dependent gas
 behavior is still covered separately by gas-property unit tests and the
 duct validations that use `TemperatureDependentAir`.
 
+## Engine integration API: model-owned external boundaries
+
+**Decision**: engine-simulator integration happens through model-level
+external boundaries. The host simulator reads `ExternalPort` snapshots,
+computes its 0D update, and supplies either a ghost state or a
+mass/energy boundary flow before advancing the 1D model.
+
+**Why**: this keeps cylinders, plenums, combustion, and other 0D engine
+objects outside this 1D duct library while still providing a stable
+coupling surface.
+
+**Tradeoff accepted**: the 1D library does not schedule or solve 0D
+components internally. The embedding simulator owns ordering and must
+provide controls for every external boundary before stepping.
+
 ## Artificial dissipation: simplest possible (basic 2nd-difference / Lapidus-style)
 
 **Decision**: a single global scalar artificial-viscosity coefficient

@@ -12,6 +12,9 @@ pub use boundaries::{
 };
 pub use duct::{BoundaryOverride, Duct, DuctConfig, StepReport};
 pub use gas_properties::{GasProperties, TemperatureDependentAir};
-pub use model::{JunctionDiagnostic, Model, ModelBoundary, OrificeDiagnostic};
+pub use model::{
+    ExternalBoundaryControl, ExternalBoundaryId, ExternalPort, JunctionDiagnostic, Model,
+    ModelBoundary, OrificeDiagnostic, PipeEnd, PipeId,
+};
 pub use state::{Primitive, PrimitiveError, State};
 pub use validation::{OrganPipeConfig, OrganPipeRun, RunReport, ScalarField, Snapshot};

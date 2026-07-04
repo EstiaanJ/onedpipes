@@ -141,9 +141,12 @@ tests/
 ```
 
 0D components (cylinders, plenums) are out of scope for this project
-phase — see `PRODUCT_SPEC.md`. If added later, they should sit above
-`model.*` and consume the boundary interfaces, not be threaded into
-`duct.*`.
+phase — see `PRODUCT_SPEC.md`. Host engine simulators couple through
+model-level external boundary controls: read exposed pipe-end states,
+compute 0D mass/energy exchange, then provide a ghost state or
+mass/energy flow before stepping the 1D model. If built-in 0D components
+are added later, they should sit above `model.*` and consume this
+boundary interface, not be threaded into `duct.*`.
 
 ## Testing
 

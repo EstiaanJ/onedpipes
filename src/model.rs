@@ -10,6 +10,21 @@ use crate::{
     state::State,
 };
 
+/// Stable identifier for a pipe stored in a [`Model`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct PipeId(pub usize);
+
+/// Stable identifier for a model boundary controlled by an external 0D component.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct ExternalBoundaryId(pub usize);
+
+/// A specific end of a pipe.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PipeEnd {
+    pub pipe_id: PipeId,
+    pub end: DuctEnd,
+}
+
 #[derive(Clone, Debug)]
 pub enum ModelBoundary {
     Closed,
@@ -22,6 +37,34 @@ pub enum ModelBoundary {
     Orifice {
         orifice_id: usize,
         valve: ValveOrifice,
+    },
+    External {
+        external_id: ExternalBoundaryId,
+    },
+}
+
+/// Snapshot of a pipe end exposed to an external 0D component.
+#[derive(Clone, Copy, Debug)]
+pub struct ExternalPort {
+    pub external_id: ExternalBoundaryId,
+    pub pipe_id: PipeId,
+    pub end: DuctEnd,
+    pub area: f64,
+    pub state: State,
+}
+
+/// Boundary input supplied by an external 0D component.
+#[derive(Clone, Copy, Debug)]
+pub enum ExternalBoundaryControl {
+    /// Supply a ghost-cell state directly.
+    GhostState(State),
+    /// Supply an integrated boundary flow.
+    ///
+    /// Positive `mass_flow_out` and `energy_flow_out` mean flow leaving
+    /// the 1D pipe and entering the external 0D component.
+    Flow {
+        mass_flow_out: f64,
+        energy_flow_out: f64,
     },
 }
 
@@ -63,6 +106,12 @@ impl ModelBoundary {
     pub fn orifice(orifice_id: usize, valve: ValveOrifice) -> Self {
         Self::Orifice { orifice_id, valve }
     }
+
+    pub fn external(external_id: usize) -> Self {
+        Self::External {
+            external_id: ExternalBoundaryId(external_id),
+        }
+    }
 }
 
 impl<G: GasProperties> BoundaryCondition<G> for ModelBoundary {
@@ -78,6 +127,9 @@ impl<G: GasProperties> BoundaryCondition<G> for ModelBoundary {
             Self::Orifice { .. } => {
                 panic!("orifice boundaries require Model::step_with_dt coupling")
             }
+            Self::External { .. } => {
+                panic!("external boundaries require Model::step_with_dt coupling")
+            }
         }
     }
 }
@@ -88,6 +140,7 @@ where
     G: GasProperties,
 {
     ducts: Vec<Duct<G, ModelBoundary, ModelBoundary>>,
+    external_controls: BTreeMap<ExternalBoundaryId, ExternalBoundaryControl>,
     cfl: f64,
     time: f64,
 }
@@ -100,13 +153,16 @@ where
         assert!(cfl > 0.0);
         Self {
             ducts: Vec::new(),
+            external_controls: BTreeMap::new(),
             cfl,
             time: 0.0,
         }
     }
 
-    pub fn add_duct(&mut self, duct: Duct<G, ModelBoundary, ModelBoundary>) {
+    pub fn add_duct(&mut self, duct: Duct<G, ModelBoundary, ModelBoundary>) -> PipeId {
+        let pipe_id = PipeId(self.ducts.len());
         self.ducts.push(duct);
+        pipe_id
     }
 
     pub fn add_uniform_duct(
@@ -116,14 +172,14 @@ where
         initial_state: State,
         left_boundary: ModelBoundary,
         right_boundary: ModelBoundary,
-    ) {
+    ) -> PipeId {
         self.add_duct(Duct::new(
             gas,
             config,
             initial_state,
             left_boundary,
             right_boundary,
-        ));
+        ))
     }
 
     pub fn ducts(&self) -> &[Duct<G, ModelBoundary, ModelBoundary>] {
@@ -132,6 +188,34 @@ where
 
     pub fn ducts_mut(&mut self) -> &mut [Duct<G, ModelBoundary, ModelBoundary>] {
         &mut self.ducts
+    }
+
+    pub fn pipe(&self, pipe_id: PipeId) -> &Duct<G, ModelBoundary, ModelBoundary> {
+        &self.ducts[pipe_id.0]
+    }
+
+    pub fn pipe_mut(&mut self, pipe_id: PipeId) -> &mut Duct<G, ModelBoundary, ModelBoundary> {
+        &mut self.ducts[pipe_id.0]
+    }
+
+    pub fn pipe_cells(&self, pipe_id: PipeId) -> &[State] {
+        self.pipe(pipe_id).cells()
+    }
+
+    pub fn pipe_primitive_cells(&self, pipe_id: PipeId) -> Vec<crate::Primitive> {
+        self.pipe(pipe_id).primitive_cells()
+    }
+
+    pub fn pipe_end_state(&self, pipe_end: PipeEnd) -> State {
+        self.pipe(pipe_end.pipe_id).end_state(pipe_end.end)
+    }
+
+    pub fn pipe_total_mass(&self, pipe_id: PipeId) -> f64 {
+        self.pipe(pipe_id).total_mass()
+    }
+
+    pub fn pipe_total_energy(&self, pipe_id: PipeId) -> f64 {
+        self.pipe(pipe_id).total_energy()
     }
 
     pub fn time(&self) -> f64 {
@@ -156,6 +240,43 @@ where
                 flow: solved.flow,
             })
             .collect()
+    }
+
+    pub fn external_ports(&self) -> Vec<ExternalPort> {
+        let mut ports = Vec::new();
+        for (duct_index, duct) in self.ducts.iter().enumerate() {
+            if let ModelBoundary::External { external_id } = duct.left_boundary() {
+                ports.push(ExternalPort {
+                    external_id: *external_id,
+                    pipe_id: PipeId(duct_index),
+                    end: DuctEnd::Left,
+                    area: duct.config().area,
+                    state: duct.end_state(DuctEnd::Left),
+                });
+            }
+            if let ModelBoundary::External { external_id } = duct.right_boundary() {
+                ports.push(ExternalPort {
+                    external_id: *external_id,
+                    pipe_id: PipeId(duct_index),
+                    end: DuctEnd::Right,
+                    area: duct.config().area,
+                    state: duct.end_state(DuctEnd::Right),
+                });
+            }
+        }
+        ports
+    }
+
+    pub fn set_external_boundary_control(
+        &mut self,
+        external_id: ExternalBoundaryId,
+        control: ExternalBoundaryControl,
+    ) {
+        self.external_controls.insert(external_id, control);
+    }
+
+    pub fn clear_external_boundary_controls(&mut self) {
+        self.external_controls.clear();
     }
 
     pub fn step(&mut self) -> StepReport {
@@ -253,6 +374,45 @@ where
                 second_state,
                 second_flux,
             );
+        }
+        for (duct_index, end, external_id) in self.external_connections() {
+            let duct = &self.ducts[duct_index];
+            let state = duct.end_state(end);
+            let control = self.external_controls.get(&external_id).unwrap_or_else(|| {
+                panic!(
+                    "external boundary {:?} requires control before Model::step_with_dt",
+                    external_id
+                )
+            });
+            let boundary_override = match *control {
+                ExternalBoundaryControl::GhostState(ghost_state) => {
+                    BoundaryOverride::ghost(ghost_state)
+                }
+                ExternalBoundaryControl::Flow {
+                    mass_flow_out,
+                    energy_flow_out,
+                } => {
+                    let face_flux = boundary_flux_from_outflow(
+                        state,
+                        end,
+                        duct.config().area,
+                        mass_flow_out,
+                        energy_flow_out,
+                        duct.gas(),
+                    );
+                    BoundaryOverride::flux(state, face_flux)
+                }
+            };
+            match end {
+                DuctEnd::Left => {
+                    assert!(overrides[duct_index].0.ghost_state.is_none());
+                    overrides[duct_index].0 = boundary_override;
+                }
+                DuctEnd::Right => {
+                    assert!(overrides[duct_index].1.ghost_state.is_none());
+                    overrides[duct_index].1 = boundary_override;
+                }
+            }
         }
         overrides
     }
@@ -355,6 +515,19 @@ where
         let duct = &self.ducts[duct_index];
         JunctionPort::new(duct.end_state(end), end, duct.config().area)
     }
+
+    fn external_connections(&self) -> Vec<(usize, DuctEnd, ExternalBoundaryId)> {
+        let mut connections = Vec::new();
+        for (duct_index, duct) in self.ducts.iter().enumerate() {
+            if let ModelBoundary::External { external_id } = duct.left_boundary() {
+                connections.push((duct_index, DuctEnd::Left, *external_id));
+            }
+            if let ModelBoundary::External { external_id } = duct.right_boundary() {
+                connections.push((duct_index, DuctEnd::Right, *external_id));
+            }
+        }
+        connections
+    }
 }
 
 fn set_flux_override(
@@ -400,8 +573,13 @@ fn boundary_flux_from_outflow<G: GasProperties>(
 #[cfg(test)]
 mod tests {
     use super::{Model, ModelBoundary};
-    use crate::{GasProperties, ValveOrifice};
-    use crate::{duct::DuctConfig, gas_properties::TemperatureDependentAir, state::State};
+    use crate::{DuctEnd, GasProperties, ValveOrifice};
+    use crate::{
+        duct::DuctConfig,
+        gas_properties::TemperatureDependentAir,
+        model::{ExternalBoundaryControl, ExternalBoundaryId, PipeEnd},
+        state::State,
+    };
 
     #[test]
     fn model_supports_mixed_boundary_types() {
@@ -539,6 +717,105 @@ mod tests {
         );
 
         let report = model.step_with_dt(1.0e-7);
+
+        assert_eq!(report.clipped_cells, 0);
+        assert_eq!(report.fallback_faces, 0);
+    }
+
+    #[test]
+    fn model_api_exposes_pipe_ids_and_state_queries() {
+        let gas = TemperatureDependentAir::new();
+        let state = State::from_primitive(1.2, 0.0, 101_325.0, gas);
+        let mut model = Model::new(0.5);
+        let pipe_id = model.add_uniform_duct(
+            gas,
+            DuctConfig::new(1.0, 8, 1.0),
+            state,
+            ModelBoundary::Closed,
+            ModelBoundary::Open {
+                ambient_pressure: 101_325.0,
+            },
+        );
+
+        assert_eq!(pipe_id.0, 0);
+        assert_eq!(model.pipe_cells(pipe_id).len(), 8);
+        assert_eq!(
+            model.pipe_end_state(PipeEnd {
+                pipe_id,
+                end: DuctEnd::Left,
+            }),
+            state
+        );
+        assert!(model.pipe_total_mass(pipe_id) > 0.0);
+        assert!(model.pipe_total_energy(pipe_id) > 0.0);
+    }
+
+    #[test]
+    fn external_ports_expose_pipe_end_state_for_zero_d_coupling() {
+        let gas = TemperatureDependentAir::new();
+        let state = State::from_primitive(1.2, 0.0, 101_325.0, gas);
+        let mut model = Model::new(0.5);
+        let pipe_id = model.add_uniform_duct(
+            gas,
+            DuctConfig::new(1.0, 8, 1.0),
+            state,
+            ModelBoundary::Closed,
+            ModelBoundary::external(7),
+        );
+
+        let ports = model.external_ports();
+
+        assert_eq!(ports.len(), 1);
+        assert_eq!(ports[0].external_id, ExternalBoundaryId(7));
+        assert_eq!(ports[0].pipe_id, pipe_id);
+        assert_eq!(ports[0].end, DuctEnd::Right);
+        assert_eq!(ports[0].state, state);
+    }
+
+    #[test]
+    fn model_steps_with_external_ghost_state_control() {
+        let gas = TemperatureDependentAir::new();
+        let state = State::from_primitive(1.2, 0.0, 101_325.0, gas);
+        let mut model = Model::new(0.5);
+        model.add_uniform_duct(
+            gas,
+            DuctConfig::new(1.0, 8, 1.0),
+            state,
+            ModelBoundary::Closed,
+            ModelBoundary::external(0),
+        );
+        model.set_external_boundary_control(
+            ExternalBoundaryId(0),
+            ExternalBoundaryControl::GhostState(state),
+        );
+
+        let report = model.step_with_dt(1.0e-6);
+
+        assert_eq!(report.clipped_cells, 0);
+        assert_eq!(report.fallback_faces, 0);
+    }
+
+    #[test]
+    fn model_steps_with_external_flow_control() {
+        let gas = TemperatureDependentAir::new();
+        let state = State::from_primitive(1.2, 0.0, 101_325.0, gas);
+        let mut model = Model::new(0.5);
+        model.add_uniform_duct(
+            gas,
+            DuctConfig::new(1.0, 8, 1.0),
+            state,
+            ModelBoundary::external(0),
+            ModelBoundary::Closed,
+        );
+        model.set_external_boundary_control(
+            ExternalBoundaryId(0),
+            ExternalBoundaryControl::Flow {
+                mass_flow_out: 0.0,
+                energy_flow_out: 0.0,
+            },
+        );
+
+        let report = model.step_with_dt(1.0e-6);
 
         assert_eq!(report.clipped_cells, 0);
         assert_eq!(report.fallback_faces, 0);

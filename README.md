@@ -66,8 +66,8 @@ Wall heat transfer remains planned milestone work.
 - No multi-species transport yet — single effective gas for now.
 - No shock-capturing / TVD limiters — not needed for this application
   (see `docs/PRODUCT_SPEC.md` for why).
-- No 0D engine coupling (cylinders, plenums, combustion) — out of scope
-  for this phase of the project.
+- No built-in 0D engine components (cylinders, plenums, combustion);
+  external coupling points are exposed for a host engine simulator.
 
 ## Testing
 
@@ -86,6 +86,7 @@ AGENTS.md                 Instructions for AI coding agents working on this repo
 docs/PRODUCT_SPEC.md       What is being built and why
 docs/ARCHITECTURE.md      How it is technically structured
 docs/DECISIONS.md          Key decisions, rationale, and future upgrade paths
+docs/PUBLIC_API.md         Public library API for engine-simulator integration
 src/                       Solver source (created during implementation)
 tests/                     Validation cases (organ-pipe resonance, Sod tube, etc.)
 ```
@@ -93,6 +94,6 @@ tests/                     Validation cases (organ-pipe resonance, Sod tube, etc
 ## Getting started
 
 See `docs/ARCHITECTURE.md` for the module layout and `docs/PRODUCT_SPEC.md`
-for the milestone plan. The completed build order is: bare-pipe wave
-propagation → closed/open end boundaries → junctions → valve/orifice
-boundary → Sod shock tube.
+for the milestone plan. See `docs/PUBLIC_API.md` for the integration API.
+The completed build order is: bare-pipe wave propagation → closed/open
+end boundaries → junctions → valve/orifice boundary → Sod shock tube.
