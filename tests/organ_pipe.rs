@@ -1,4 +1,4 @@
-use onedpipes::{ClosedEnd, Duct, DuctConfig, State, TemperatureDependentAir};
+use onedpipes::{ClosedEnd, Duct, DuctConfig, SolverKind, State, TemperatureDependentAir};
 
 fn first_positive_peak_time(samples: &[(f64, f64)], min_time: f64) -> Option<f64> {
     samples.windows(3).find_map(|window| {
@@ -11,8 +11,7 @@ fn first_positive_peak_time(samples: &[(f64, f64)], min_time: f64) -> Option<f64
     })
 }
 
-#[test]
-fn closed_closed_pipe_matches_fundamental_resonance_frequency() {
+fn assert_closed_closed_pipe_matches_fundamental_resonance_frequency(solver: SolverKind) {
     let gas = TemperatureDependentAir::new();
     let length = 1.0;
     let cells = 96;
@@ -21,6 +20,7 @@ fn closed_closed_pipe_matches_fundamental_resonance_frequency() {
     let amplitude = 1.0e-3;
     let config = DuctConfig {
         artificial_viscosity: 0.01,
+        solver,
         ..DuctConfig::new(length, cells, 1.0)
     };
     let mut duct = Duct::from_initializer(gas, config, ClosedEnd, ClosedEnd, |x| {
@@ -58,6 +58,17 @@ fn closed_closed_pipe_matches_fundamental_resonance_frequency() {
 
     assert!(
         relative_error < 0.03,
-        "measured={measured_frequency:.4}, expected={expected_frequency:.4}, relative_error={relative_error:.4}"
+        "solver={}, measured={measured_frequency:.4}, expected={expected_frequency:.4}, relative_error={relative_error:.4}",
+        solver.label()
     );
+}
+
+#[test]
+fn lax_wendroff_closed_closed_pipe_matches_fundamental_resonance_frequency() {
+    assert_closed_closed_pipe_matches_fundamental_resonance_frequency(SolverKind::LaxWendroff);
+}
+
+#[test]
+fn mac_cormack_closed_closed_pipe_matches_fundamental_resonance_frequency() {
+    assert_closed_closed_pipe_matches_fundamental_resonance_frequency(SolverKind::MacCormack);
 }

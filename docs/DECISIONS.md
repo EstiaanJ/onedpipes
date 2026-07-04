@@ -7,8 +7,8 @@
 **Decision**: two-step Lax–Wendroff (Richtmyer) remains the checked-in
 baseline interior solver. MacCormack predictor-corrector is the approved
 second interior solver model, developed on its own branch and exposed
-through the same solver-selection interface once it passes the same
-milestone validations.
+through the same solver-selection interface for milestone scopes where it
+passes the same validations.
 
 **Why**: the project needs a second independent explicit scheme to
 cross-check the Lax–Wendroff results, prove that validation outcomes are
@@ -23,10 +23,10 @@ each solver has already passed the independent analytic or hand-computed
 reference for that scenario.
 
 **Branch plan**: Lax–Wendroff milestone work can continue on its own
-branch while the MacCormack method is developed on the MacCormack branch.
-The GUI is shared; branch work should converge on a common model/run API
-with a solver selector rather than separate viewers or duplicated
-scenario setup.
+branch while MacCormack milestone work continues on the MacCormack
+branch. The GUI is shared; branch work should converge on a common
+model/run API with a solver selector rather than separate viewers or
+duplicated scenario setup.
 
 ## Boundary conditions: simple models now, MoC later
 
@@ -60,6 +60,25 @@ directly. Energy conservation is exact for hand-balanced cases with equal
 total enthalpy across the ports; more general mixing and loss behavior is
 left for a later junction upgrade after the model-level coupling is in
 place and validated.
+
+## Variable-area ducts: area-weighted explicit update
+
+**Decision**: variable-area ducts use an area-weighted conservative
+finite-volume update internally (`A·U`, `A·F`) with the geometry pressure
+source included inside each explicit predictor/corrector.
+
+**Why**: Venturi geometry and Helmholtz necks require spatial area
+variation. Treating `p·dA/dx` as a generic post-step source is not
+well-balanced: a static uniform-pressure duct can generate spurious
+motion. Including the geometry source in the predictor/corrector lets
+both Lax–Wendroff and MacCormack preserve static variable-area ducts and
+conserve area-weighted mass in closed ducts.
+
+**Tradeoff accepted**: this makes the explicit solver code slightly more
+complex, but keeps one solver-selection path for constant and
+variable-area ducts. Steady Venturi validation still needs pressure,
+stagnation-state, or mass-flow inlet/outlet boundaries before it can be
+checked against Bernoulli/continuity references.
 
 ## Artificial dissipation: simplest possible (basic 2nd-difference / Lapidus-style)
 

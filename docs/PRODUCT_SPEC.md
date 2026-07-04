@@ -41,8 +41,8 @@ above and would add cost/complexity for no benefit:
 - Quasi-1D compressible flow in ducts of varying cross-sectional area
 - User-selectable explicit interior solvers:
   - two-step Lax–Wendroff (Richtmyer), the current baseline
-  - MacCormack predictor-corrector, developed on its own branch as a
-    peer model with the same validation goals
+  - MacCormack predictor-corrector, a peer model with the same validation
+    goals
 - Single effective gas with temperature-dependent γ(T), cp(T)
 - Simple wall heat transfer (damping mechanism + physical realism)
 - Boundary types: open end, closed end, multi-pipe junction, valve/orifice
@@ -82,10 +82,11 @@ Testing is a specific, tracked goal, not incidental:
 ## Milestones (must pass in order per solver)
 
 The Lax–Wendroff branch remains the baseline milestone path. The
-MacCormack branch follows the same milestone order before being promoted
-as a user-selectable model. Shared full-slice tests should cover both
-methods as soon as the MacCormack implementation reaches the relevant
-milestone.
+MacCormack branch follows the same milestone order; it may remain
+user-selectable for milestone scopes it has passed, and future milestone
+behavior stays gated until the matching validation passes. Shared
+full-slice tests should cover both methods as soon as the MacCormack
+implementation reaches the relevant milestone.
 
 1. [x] **Bare duct wave propagation** — closed-closed pipe reproduces the
    analytic organ-pipe resonant frequency within a few percent.

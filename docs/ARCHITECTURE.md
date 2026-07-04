@@ -14,6 +14,11 @@ S = area-change pressure term + wall friction + wall heat transfer
 `A(x)` is duct cross-sectional area (piecewise or continuous per duct).
 Conservative variables are the stored state in every cell; primitives
 (`p, u, T, a`) are always derived, never stored as primary state.
+The finite-volume update advances area-weighted conservative quantities
+internally (`A·U`) and divides back to cell-local `U` after each step.
+For variable-area ducts, face fluxes use `A_face·F`, and the pressure
+area source `p·dA/dx` is included inside each explicit predictor/corrector
+so a static uniform-pressure duct remains well balanced.
 
 ## Interior solver interface
 
@@ -29,6 +34,9 @@ solver must use the same contract:
 - Source terms, artificial dissipation, and positivity enforcement are
   applied through shared hooks unless a future decision explicitly
   documents why a solver needs different handling.
+- Constant-area and variable-area ducts go through the same solver
+  selection path. A solver is not Venturi-ready until it passes static
+  variable-area well-balance and area-weighted mass conservation tests.
 
 The GUI and validation viewers select a solver through model/run
 configuration. They must not fork into separate Lax–Wendroff and
@@ -43,18 +51,19 @@ Per duct, per step:
 2. **Corrector** (full step, cell centers):
    `U_i^{n+1} = U_i^n − (Δt/Δx)(F*_{i+1/2} − F*_{i-1/2})`
 
-Source terms (area change, friction, heat transfer) are applied via
-operator splitting: advance the homogeneous interior-solver step, then
-integrate sources over `Δt` for each cell. Keep source integration
-explicit (forward Euler) for v1 — revisit only if it causes stability
-problems at Δt set by the CFL condition below.
+Friction and heat-transfer source terms are applied via operator
+splitting: advance the interior-solver step, then integrate sources over
+`Δt` for each cell. Keep source integration explicit (forward Euler) for
+v1 — revisit only if it causes stability problems at Δt set by the CFL
+condition below. The geometry pressure source is part of the explicit
+area-weighted predictor/corrector itself, not a post-step split source,
+because it must balance `A·p` flux gradients at rest.
 
-## Planned solver: MacCormack predictor-corrector
+## Solver: MacCormack predictor-corrector
 
-MacCormack is the approved second interior solver model. It is developed
-on its own branch and must match the same milestone validation goals as
-the Lax–Wendroff baseline before it is exposed as a normal user-selectable
-model.
+MacCormack is the approved second interior solver model. It must match
+the same milestone validation goals as the Lax–Wendroff baseline to
+remain exposed as a normal user-selectable model.
 
 Per duct, per step for the homogeneous conservative update:
 
@@ -64,12 +73,12 @@ Per duct, per step for the homogeneous conservative update:
    `U_i^{n+1} = ½(U_i^n + Ū_i − (Δt/Δx)(F̂_i − F̂_{i-1}))`
    where `F̂_i = F(Ū_i)`.
 
-Use the same conservative variables, flux function, ghost-cell boundary
-interface, global timestep, source splitting, artificial dissipation, and
-positivity/fallback policy as the Lax–Wendroff solver. Do not add
-limiters, Riemann solvers, implicit stepping, or shock detectors as part
-of the MacCormack branch; those remain out of scope unless a separate
-decision changes the product scope.
+Use the same conservative variables, area-weighted flux/source handling,
+ghost-cell boundary interface, global timestep, source splitting,
+artificial dissipation, and positivity/fallback policy as the
+Lax–Wendroff solver. Do not add limiters, Riemann solvers, implicit
+stepping, or shock detectors as part of the MacCormack branch; those
+remain out of scope unless a separate decision changes the product scope.
 
 ## Boundaries (v1 — simple, not MoC)
 

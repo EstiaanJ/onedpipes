@@ -15,20 +15,26 @@ This library is intended for engine-simulation
 The checked-in Rust solver currently covers milestones 1 and 2 from
 `docs/PRODUCT_SPEC.md`:
 
-- Solves the quasi-1D Euler equations in each duct using a two-step
-  Lax–Wendroff (Richtmyer) scheme.
+- Solves the quasi-1D Euler equations in each duct using a selectable
+  explicit interior solver: two-step Lax–Wendroff (Richtmyer) or
+  MacCormack predictor-corrector.
 - Provides pluggable closed-end and open-end boundary models with pulse
   reflection validation.
 - Tracks temperature-dependent gas properties (γ(T), cp(T)) for a single
   effective gas for now, structured so per-species tracking can be added
   later without restructuring the solver.
 - Includes a minimal artificial-dissipation term for numerical stability.
+- Supports variable-area duct profiles in the interior solver path, with
+  area-weighted updates and well-balance tests for Venturi-shaped
+  geometry.
 
-Junctions are the active Lax–Wendroff milestone. MacCormack is planned
-as a second selectable interior solver on its own branch, with the same
-milestone goals and shared full-slice validation wherever the physical
-case setup is solver-independent. Valve/orifice boundaries and wall heat
-transfer remain planned milestone work.
+Junctions are the active milestone. Lax–Wendroff and MacCormack share
+the completed organ-pipe and boundary full-slice validation cases where
+the physical case setup is solver-independent. Valve/orifice boundaries
+and wall heat transfer remain planned milestone work.
+Steady Venturi-effect validation still needs pressure/stagnation-state
+or mass-flow inlet/outlet boundaries; Helmholtz validation still needs
+connected side-branch/cavity support.
 
 ## Milestone TODO
 
@@ -47,28 +53,28 @@ transfer remain planned milestone work.
 - [ ] Milestone 5: Sod shock tube wave structure and speeds match the
   analytic reference within expected unlimited-scheme smearing.
 
-## Parallel Solver TODO
+## Solver TODO
 
-- [ ] Introduce a shared interior-solver selection API while preserving
+- [x] Introduce a shared interior-solver selection API while preserving
   current Lax–Wendroff behavior.
-- [ ] Add MacCormack predictor-corrector as a peer solver using the same
+- [x] Add MacCormack predictor-corrector as a peer solver using the same
   conservative state, ghost-cell boundaries, global timestep,
   artificial-dissipation hook, and positivity diagnostics.
-- [ ] Parameterize full-slice validation cases over solver method where
-  possible; both solvers must pass independent references before
+- [x] Parameterize milestone 1 and 2 full-slice validation cases over
+  solver method.
+- [ ] Parameterize future full-slice validation cases over solver method
+  where possible; both solvers must pass independent references before
   cross-solver comparisons are treated as proof/regression evidence.
-- [ ] Add solver selection to the shared GUI/viewer instead of creating a
+- [x] Add solver selection to the shared GUI/viewer instead of creating a
   separate MacCormack viewer.
-- [ ] Keep branch work coordinated: Lax–Wendroff milestone work continues
-  on its branch, while MacCormack develops on its branch against the same
-  public model/run concepts.
+- [ ] Keep future branch work coordinated: Lax–Wendroff and MacCormack
+  milestone work should continue against the same public model/run
+  concepts.
 
 ## What it doesn't do (yet)
 
 - No Method of Characteristics (MoC) boundaries — planned upgrade, see
   `docs/DECISIONS.md`.
-- No second selectable solver in the checked-in implementation yet —
-  MacCormack is planned and documented, not implemented here.
 - No multi-species transport yet — single effective gas for now.
 - No shock-capturing / TVD limiters — not needed for this application
   (see `docs/PRODUCT_SPEC.md` for why).
