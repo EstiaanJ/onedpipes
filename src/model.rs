@@ -556,7 +556,7 @@ fn boundary_flux_from_outflow<G: GasProperties>(
     energy_flow_out: f64,
     gas: G,
 ) -> State {
-    let prim = port_state.primitive(gas);
+    let prim = port_state.primitive_clamped(gas);
     let coordinate_sign = match end {
         DuctEnd::Left => -1.0,
         DuctEnd::Right => 1.0,

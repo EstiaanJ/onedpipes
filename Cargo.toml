@@ -3,9 +3,17 @@ name = "onedpipes"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+viewer = ["dep:eframe", "dep:plotters"]
+
 [dependencies]
-eframe = "0.32"
-plotters = { version = "0.3", default-features = false, features = [
+eframe = { version = "0.32", optional = true }
+plotters = { version = "0.3", optional = true, default-features = false, features = [
     "bitmap_backend",
     "line_series",
 ] }
+
+[[bin]]
+name = "viewer"
+required-features = ["viewer"]
