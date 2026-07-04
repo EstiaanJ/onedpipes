@@ -8,10 +8,10 @@ pub mod validation;
 
 pub use boundaries::{
     BoundaryCondition, ClosedEnd, DuctEnd, JunctionPort, JunctionSolution, MultiPipeJunction,
-    OpenEnd, PortFlow,
+    OpenEnd, OrificeFlow, PortFlow, ValveOrifice,
 };
-pub use duct::{Duct, DuctConfig, StepReport};
+pub use duct::{BoundaryOverride, Duct, DuctConfig, StepReport};
 pub use gas_properties::{GasProperties, TemperatureDependentAir};
-pub use model::Model;
-pub use state::{Primitive, State};
+pub use model::{JunctionDiagnostic, Model, ModelBoundary, OrificeDiagnostic};
+pub use state::{Primitive, PrimitiveError, State};
 pub use validation::{OrganPipeConfig, OrganPipeRun, RunReport, ScalarField, Snapshot};

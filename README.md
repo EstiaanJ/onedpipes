@@ -12,20 +12,27 @@ This library is intended for engine-simulation
 
 ## Current implementation
 
-The checked-in Rust solver currently covers milestones 1 and 2 from
+The checked-in Rust solver currently covers milestones 1 through 5 from
 `docs/PRODUCT_SPEC.md`:
 
 - Solves the quasi-1D Euler equations in each duct using a two-step
   Lax–Wendroff (Richtmyer) scheme.
 - Provides pluggable closed-end and open-end boundary models with pulse
   reflection validation.
+- Provides a constant-pressure multi-pipe junction model with coupled
+  model stepping and mass/energy conservation validation.
+- Provides a quasi-steady valve/orifice model with coupled model
+  stepping and hand-computed compressible discharge validation.
+- Includes a Sod shock tube validation against an independent exact
+  Riemann solution, with tolerances chosen for the expected smearing of
+  the unlimited LW scheme.
 - Tracks temperature-dependent gas properties (γ(T), cp(T)) for a single
   effective gas for now, structured so per-species tracking can be added
   later without restructuring the solver.
 - Includes a minimal artificial-dissipation term for numerical stability.
 
-Junctions are the active milestone. Valve/orifice boundaries and wall
-heat transfer remain planned milestone work.
+All v1 validation milestones are implemented for the current models.
+Wall heat transfer remains planned milestone work.
 
 ## Milestone TODO
 
@@ -33,16 +40,24 @@ heat transfer remain planned milestone work.
   against analytic organ-pipe frequency.
 - [x] Milestone 2: closed-end and open-end boundary reflection behavior
   validated independently.
-- [ ] Milestone 3: multi-pipe junction conserves mass and energy across
+- [x] Milestone 3: multi-pipe junction conserves mass and energy across
   2-3 connected pipes.
 - [x] Milestone 3 subtask: constant-pressure junction core solves shared
   pressure and balanced port flux diagnostics.
-- [ ] Milestone 3 subtask: attach junction coupling to multi-duct model
+- [x] Milestone 3 subtask: attach junction coupling to multi-duct model
   stepping.
-- [ ] Milestone 4: valve/orifice boundary matches hand-computed
+- [x] Milestone 3 subtask: validate 2-pipe, 3-pipe, and model-coupled
+  junction conservation in `tests/`.
+- [x] Milestone 4: valve/orifice boundary matches hand-computed
   compressible orifice discharge.
-- [ ] Milestone 5: Sod shock tube wave structure and speeds match the
+- [x] Milestone 4 subtask: validate subcritical and choked pressure
+  ratios in `tests/`.
+- [x] Milestone 4 subtask: attach orifice flux coupling to multi-duct
+  model stepping.
+- [x] Milestone 5: Sod shock tube wave structure and speeds match the
   analytic reference within expected LW smearing.
+- [x] Milestone 5 subtask: validate density, velocity, pressure, and
+  shock position against an exact Riemann solution in `tests/`.
 
 ## What it doesn't do (yet)
 
@@ -78,5 +93,6 @@ tests/                     Validation cases (organ-pipe resonance, Sod tube, etc
 ## Getting started
 
 See `docs/ARCHITECTURE.md` for the module layout and `docs/PRODUCT_SPEC.md`
-for the milestone plan. The build order is: bare-pipe wave propagation →
-closed/open end boundaries → junctions → valve/orifice boundary.
+for the milestone plan. The completed build order is: bare-pipe wave
+propagation → closed/open end boundaries → junctions → valve/orifice
+boundary → Sod shock tube.

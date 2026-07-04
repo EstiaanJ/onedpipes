@@ -28,17 +28,50 @@ downstream use of this boundary).
 
 **Decision**: the first junction implementation solves one instantaneous
 shared pressure from all connected port states using a linear acoustic
-relation at each duct end, then reports per-port mass and energy fluxes.
+relation at each duct end. It then mixes incoming total enthalpy and
+assigns that enthalpy to outflow ports so the reported port fluxes
+balance both mass and energy.
 
 **Why**: this matches the v1 constant-pressure junction model without
 introducing Method of Characteristics machinery or pressure-loss
 coefficients before the basic 2-3 pipe conservation milestone is proven.
 
-**Tradeoff accepted**: the linear port update enforces mass balance
-directly. Energy conservation is exact for hand-balanced cases with equal
-total enthalpy across the ports; more general mixing and loss behavior is
-left for a later junction upgrade after the model-level coupling is in
-place and validated.
+**Tradeoff accepted**: the model is still a lossless, zero-volume,
+constant-pressure junction. It conserves mass and energy for the coupled
+ports, but does not model pressure losses, junction volume dynamics, or
+separation/mixing losses.
+
+## Valve/orifice boundary: quasi-steady compressible discharge
+
+**Decision**: the first valve/orifice implementation uses the standard
+isentropic compressible orifice equation with a constant discharge
+coefficient and fixed instantaneous flow area. It computes flow from the
+higher stagnation-pressure side to the lower side, including the choked
+flow limit, and imposes the result as a model-level boundary flux.
+
+**Why**: this matches the v1 requirement to validate steady discharge
+against a hand-computed compressible-orifice reference without adding
+characteristic boundary treatment or valve lift schedules.
+
+**Tradeoff accepted**: this is a quasi-steady, loss-coefficient model. It
+does not model unsteady valve inertia, vena-contracta dynamics beyond
+`Cd`, acoustic interaction inside the restriction, or a lift-dependent
+coefficient table.
+
+## Sod shock tube validation: constant-gamma reference gas
+
+**Decision**: the Sod validation test uses a test-local constant-gamma
+ideal gas rather than the production temperature-dependent air model.
+
+**Why**: the published Sod exact solution assumes a constant heat
+capacity ratio. Keeping the validation gas constant-gamma makes the
+comparison independent and checks the interior scheme's conservation and
+wave speeds without mixing in variable-gas-property error.
+
+**Tradeoff accepted**: this validation checks the numerical Euler update
+against the canonical reference problem. Temperature-dependent gas
+behavior is still covered separately by gas-property unit tests and the
+duct validations that use `TemperatureDependentAir`.
 
 ## Artificial dissipation: simplest possible (basic 2nd-difference / Lapidus-style)
 
