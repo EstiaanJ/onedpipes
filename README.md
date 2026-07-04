@@ -24,8 +24,11 @@ The checked-in Rust solver currently covers milestones 1 and 2 from
   later without restructuring the solver.
 - Includes a minimal artificial-dissipation term for numerical stability.
 
-Junctions are the active milestone. Valve/orifice boundaries and wall
-heat transfer remain planned milestone work.
+Junctions are the active Lax–Wendroff milestone. MacCormack is planned
+as a second selectable interior solver on its own branch, with the same
+milestone goals and shared full-slice validation wherever the physical
+case setup is solver-independent. Valve/orifice boundaries and wall heat
+transfer remain planned milestone work.
 
 ## Milestone TODO
 
@@ -42,12 +45,30 @@ heat transfer remain planned milestone work.
 - [ ] Milestone 4: valve/orifice boundary matches hand-computed
   compressible orifice discharge.
 - [ ] Milestone 5: Sod shock tube wave structure and speeds match the
-  analytic reference within expected LW smearing.
+  analytic reference within expected unlimited-scheme smearing.
+
+## Parallel Solver TODO
+
+- [ ] Introduce a shared interior-solver selection API while preserving
+  current Lax–Wendroff behavior.
+- [ ] Add MacCormack predictor-corrector as a peer solver using the same
+  conservative state, ghost-cell boundaries, global timestep,
+  artificial-dissipation hook, and positivity diagnostics.
+- [ ] Parameterize full-slice validation cases over solver method where
+  possible; both solvers must pass independent references before
+  cross-solver comparisons are treated as proof/regression evidence.
+- [ ] Add solver selection to the shared GUI/viewer instead of creating a
+  separate MacCormack viewer.
+- [ ] Keep branch work coordinated: Lax–Wendroff milestone work continues
+  on its branch, while MacCormack develops on its branch against the same
+  public model/run concepts.
 
 ## What it doesn't do (yet)
 
 - No Method of Characteristics (MoC) boundaries — planned upgrade, see
   `docs/DECISIONS.md`.
+- No second selectable solver in the checked-in implementation yet —
+  MacCormack is planned and documented, not implemented here.
 - No multi-species transport yet — single effective gas for now.
 - No shock-capturing / TVD limiters — not needed for this application
   (see `docs/PRODUCT_SPEC.md` for why).
@@ -71,6 +92,7 @@ AGENTS.md                 Instructions for AI coding agents working on this repo
 docs/PRODUCT_SPEC.md       What is being built and why
 docs/ARCHITECTURE.md      How it is technically structured
 docs/DECISIONS.md          Key decisions, rationale, and future upgrade paths
+docs/TODO.md               Branch-level solver and validation TODOs
 src/                       Solver source (created during implementation)
 tests/                     Validation cases (organ-pipe resonance, Sod tube, etc.)
 ```

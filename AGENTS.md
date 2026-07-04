@@ -10,6 +10,9 @@ simplicity/accuracy tradeoff with a documented upgrade path.
 1. **Get a fully working end-to-end model first.** Simplicity beats
    accuracy at this stage. Do not add sophistication (limiters, MoC,
    multi-species, implicit solvers) unless it's already in the spec.
+   MacCormack is the one approved second interior solver model; keep it
+   on its documented branch path and do not use it as permission to add
+   unrelated numerical methods.
 2. **Numerical stability and positivity** over accuracy. Never let density,
    pressure, or temperature go non-physical silently — clip and log, per
    `ARCHITECTURE.md` § Positivity.
@@ -24,7 +27,7 @@ simplicity/accuracy tradeoff with a documented upgrade path.
 
 ## Build order
 
-1. Single duct, two-step Lax–Wendroff, closed ends both sides →
+1. Single duct, selected approved interior solver, closed ends both sides →
    validate: standing wave / organ-pipe resonant frequency matches analytic
    value within a few percent.
 2. Add open-end and closed-end boundary models independently → validate
@@ -35,7 +38,10 @@ simplicity/accuracy tradeoff with a documented upgrade path.
    a hand-computed compressible orifice flow.
 
 Do not proceed to the next step until the current one has a passing
-validation case checked into `tests/`.
+validation case checked into `tests/`. This gate applies per solver
+branch: MacCormack must pass the same milestone's validation before
+moving to its next milestone, even when the Lax–Wendroff branch is
+further ahead.
 
 ## Coding conventions
 
@@ -49,11 +55,14 @@ validation case checked into `tests/`.
   ends, not special-cased branches inside the interior solver loop. This
   is required to swap in MoC boundaries later without touching the
   interior scheme.
+- Interior solvers are selected through a shared model/run API. Do not
+  fork the GUI or validation scenario setup by solver method; use shared
+  full-slice tests parameterized over solver method wherever possible.
 - Every new boundary type or gas model must ship with a unit test and a
   one-paragraph note in `docs/DECISIONS.md` if it introduces a
   simplification.
-- Do not introduce a second numerical scheme (e.g. MacCormack, upwind,
-  MoC) as an alternative interior solver without discussing it as a
+- Do not introduce any additional numerical scheme beyond the documented
+  Lax–Wendroff and MacCormack interior solvers without discussing it as a
   decision first — see `DECISIONS.md`.
 
 ## When something looks wrong
