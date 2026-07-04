@@ -24,6 +24,22 @@ valve/orifice boundary is the highest-value target for an eventual MoC
 or characteristic-based upgrade, since its accuracy dominates any
 downstream use of this boundary).
 
+## Junction boundary: constant pressure with linear acoustic port update
+
+**Decision**: the first junction implementation solves one instantaneous
+shared pressure from all connected port states using a linear acoustic
+relation at each duct end, then reports per-port mass and energy fluxes.
+
+**Why**: this matches the v1 constant-pressure junction model without
+introducing Method of Characteristics machinery or pressure-loss
+coefficients before the basic 2-3 pipe conservation milestone is proven.
+
+**Tradeoff accepted**: the linear port update enforces mass balance
+directly. Energy conservation is exact for hand-balanced cases with equal
+total enthalpy across the ports; more general mixing and loss behavior is
+left for a later junction upgrade after the model-level coupling is in
+place and validated.
+
 ## Artificial dissipation: simplest possible (basic 2nd-difference / Lapidus-style)
 
 **Decision**: a single global scalar artificial-viscosity coefficient

@@ -63,16 +63,16 @@ Testing is a specific, tracked goal, not incidental:
 
 ## Milestones (must pass in order)
 
-1. **Bare duct wave propagation** — closed-closed pipe reproduces the
+1. [x] **Bare duct wave propagation** — closed-closed pipe reproduces the
    analytic organ-pipe resonant frequency within a few percent.
-2. **Boundary models** — open end, closed end each independently produce
+2. [x] **Boundary models** — open end, closed end each independently produce
    physically correct reflection sign/magnitude on a test pulse.
-3. **Junction** — 2–3 pipe junction conserves mass and energy to numerical
+3. [ ] **Junction** — 2–3 pipe junction conserves mass and energy to numerical
    tolerance.
-4. **Valve/orifice boundary** — steady-state mass flow through the
+4. [ ] **Valve/orifice boundary** — steady-state mass flow through the
    boundary matches hand-computed compressible orifice flow for a range
    of pressure ratios.
-5. **Sod shock tube** — density/velocity/pressure profiles match the
+5. [ ] **Sod shock tube** — density/velocity/pressure profiles match the
    analytic Sod solution qualitatively (correct wave structure and
    speeds), within the smearing expected of an unlimited LW scheme.
 

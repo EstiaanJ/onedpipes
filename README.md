@@ -8,24 +8,41 @@ shock-capturing tool. Sound quality, exact shock structure, and
 discontinuity preservation are explicitly out of scope (see
 `docs/PRODUCT_SPEC.md`).
 
-This library is inteded for engine-simulation
+This library is intended for engine-simulation
 
 ## Current implementation
 
-The checked-in Rust solver currently covers milestone 1 from
+The checked-in Rust solver currently covers milestones 1 and 2 from
 `docs/PRODUCT_SPEC.md`:
 
 - Solves the quasi-1D Euler equations in each duct using a two-step
   Lax–Wendroff (Richtmyer) scheme.
-- Provides a pluggable closed-end boundary model for closed-closed duct
-  validation.
+- Provides pluggable closed-end and open-end boundary models with pulse
+  reflection validation.
 - Tracks temperature-dependent gas properties (γ(T), cp(T)) for a single
   effective gas for now, structured so per-species tracking can be added
   later without restructuring the solver.
 - Includes a minimal artificial-dissipation term for numerical stability.
 
-Open ends, junctions, valve/orifice boundaries, and wall heat transfer
-remain planned milestone work.
+Junctions are the active milestone. Valve/orifice boundaries and wall
+heat transfer remain planned milestone work.
+
+## Milestone TODO
+
+- [x] Milestone 1: bare closed-closed duct wave propagation validated
+  against analytic organ-pipe frequency.
+- [x] Milestone 2: closed-end and open-end boundary reflection behavior
+  validated independently.
+- [ ] Milestone 3: multi-pipe junction conserves mass and energy across
+  2-3 connected pipes.
+- [x] Milestone 3 subtask: constant-pressure junction core solves shared
+  pressure and balanced port flux diagnostics.
+- [ ] Milestone 3 subtask: attach junction coupling to multi-duct model
+  stepping.
+- [ ] Milestone 4: valve/orifice boundary matches hand-computed
+  compressible orifice discharge.
+- [ ] Milestone 5: Sod shock tube wave structure and speeds match the
+  analytic reference within expected LW smearing.
 
 ## What it doesn't do (yet)
 
