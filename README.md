@@ -17,15 +17,15 @@ The checked-in Rust solver currently covers milestone 1 from
 
 - Solves the quasi-1D Euler equations in each duct using a two-step
   Lax–Wendroff (Richtmyer) scheme.
-- Provides a pluggable closed-end boundary model for closed-closed duct
-  validation.
+- Provides pluggable closed-end and open-end boundary models with pulse
+  reflection validation.
 - Tracks temperature-dependent gas properties (γ(T), cp(T)) for a single
   effective gas for now, structured so per-species tracking can be added
   later without restructuring the solver.
 - Includes a minimal artificial-dissipation term for numerical stability.
 
-Open ends, junctions, valve/orifice boundaries, and wall heat transfer
-remain planned milestone work.
+Junctions, valve/orifice boundaries, and wall heat transfer remain
+planned milestone work.
 
 ## What it doesn't do (yet)
 

@@ -1,6 +1,8 @@
 mod closed_end;
+mod open_end;
 
 pub use closed_end::ClosedEnd;
+pub use open_end::OpenEnd;
 
 use crate::{gas_properties::GasProperties, state::State};
 

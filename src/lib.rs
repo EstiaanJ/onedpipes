@@ -6,7 +6,7 @@ pub mod state;
 pub mod timestep;
 pub mod validation;
 
-pub use boundaries::{BoundaryCondition, ClosedEnd};
+pub use boundaries::{BoundaryCondition, ClosedEnd, OpenEnd};
 pub use duct::{Duct, DuctConfig, StepReport};
 pub use gas_properties::{GasProperties, TemperatureDependentAir};
 pub use model::Model;
