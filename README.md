@@ -15,8 +15,9 @@ This library is intended for engine-simulation
 The checked-in Rust solver currently covers milestones 1 through 5 from
 `docs/PRODUCT_SPEC.md`:
 
-- Solves the quasi-1D Euler equations in each duct using a two-step
-  Lax–Wendroff (Richtmyer) scheme.
+- Solves the quasi-1D Euler equations in each duct using a selectable
+  explicit interior solver: two-step Lax–Wendroff (Richtmyer) or
+  MacCormack predictor-corrector.
 - Provides pluggable closed-end and open-end boundary models with pulse
   reflection validation.
 - Provides a constant-pressure multi-pipe junction model with coupled
@@ -30,8 +31,14 @@ The checked-in Rust solver currently covers milestones 1 through 5 from
   effective gas for now, structured so per-species tracking can be added
   later without restructuring the solver.
 - Includes a minimal artificial-dissipation term for numerical stability.
+- Supports variable-area duct profiles in the interior solver path, with
+  area-weighted updates and well-balance tests for Venturi-shaped
+  geometry.
 
 All v1 validation milestones are implemented for the current models.
+Steady Venturi-effect validation still needs pressure/stagnation-state
+or mass-flow inlet/outlet boundaries; Helmholtz validation still needs
+connected side-branch/cavity support.
 Wall heat transfer remains planned milestone work.
 
 ## Milestone TODO
@@ -58,6 +65,24 @@ Wall heat transfer remains planned milestone work.
   analytic reference within expected LW smearing.
 - [x] Milestone 5 subtask: validate density, velocity, pressure, and
   shock position against an exact Riemann solution in `tests/`.
+
+## Solver TODO
+
+- [x] Introduce a shared interior-solver selection API while preserving
+  current Lax–Wendroff behavior.
+- [x] Add MacCormack predictor-corrector as a peer solver using the same
+  conservative state, ghost-cell boundaries, global timestep,
+  artificial-dissipation hook, and positivity diagnostics.
+- [x] Parameterize milestone 1 and 2 full-slice validation cases over
+  solver method.
+- [ ] Parameterize future full-slice validation cases over solver method
+  where possible; both solvers must pass independent references before
+  cross-solver comparisons are treated as proof/regression evidence.
+- [x] Add solver selection to the shared GUI/viewer instead of creating a
+  separate MacCormack viewer.
+- [ ] Keep future branch work coordinated: Lax–Wendroff and MacCormack
+  milestone work should continue against the same public model/run
+  concepts.
 
 ## What it doesn't do (yet)
 
@@ -87,6 +112,7 @@ docs/PRODUCT_SPEC.md       What is being built and why
 docs/ARCHITECTURE.md      How it is technically structured
 docs/DECISIONS.md          Key decisions, rationale, and future upgrade paths
 docs/PUBLIC_API.md         Public library API for engine-simulator integration
+docs/TODO.md               Branch-level solver and validation TODOs
 src/                       Solver source (created during implementation)
 tests/                     Validation cases (organ-pipe resonance, Sod tube, etc.)
 ```

@@ -2,6 +2,7 @@ use crate::{
     boundaries::ClosedEnd,
     duct::Duct,
     gas_properties::{GasProperties, TemperatureDependentAir},
+    solvers::SolverKind,
     state::State,
 };
 
@@ -69,6 +70,7 @@ pub struct OrganPipeConfig {
     pub artificial_viscosity: f64,
     pub snapshot_interval: f64,
     pub max_history: usize,
+    pub solver: SolverKind,
 }
 
 impl Default for OrganPipeConfig {
@@ -84,6 +86,7 @@ impl Default for OrganPipeConfig {
             artificial_viscosity: 0.01,
             snapshot_interval: 2.0e-5,
             max_history: 360,
+            solver: SolverKind::default(),
         }
     }
 }
@@ -107,6 +110,7 @@ impl OrganPipeRun {
         let gas = TemperatureDependentAir::new();
         let duct_config = crate::duct::DuctConfig {
             artificial_viscosity: config.artificial_viscosity,
+            solver: config.solver,
             ..crate::duct::DuctConfig::new(config.length, config.cells, config.area)
         };
         let duct = Duct::from_initializer(gas, duct_config, ClosedEnd, ClosedEnd, |x| {
@@ -241,13 +245,14 @@ fn first_positive_peak_time(samples: &[(f64, f64)], min_time: f64) -> Option<f64
 #[cfg(test)]
 mod tests {
     use super::{OrganPipeConfig, OrganPipeRun};
+    use crate::solvers::SolverKind;
 
-    #[test]
-    fn organ_pipe_viewer_run_records_snapshots_and_probe_data() {
+    fn assert_organ_pipe_viewer_run_records_snapshots_and_probe_data(solver: SolverKind) {
         let mut run = OrganPipeRun::new(OrganPipeConfig {
             cells: 32,
             snapshot_interval: 1.0e-4,
             max_history: 16,
+            solver,
             ..OrganPipeConfig::default()
         });
 
@@ -259,5 +264,15 @@ mod tests {
         assert!(!run.probe_pressure().is_empty());
         assert_eq!(run.latest_snapshot().x.len(), 32);
         assert_eq!(run.report().clipped_cells, 0);
+    }
+
+    #[test]
+    fn lax_wendroff_organ_pipe_viewer_run_records_snapshots_and_probe_data() {
+        assert_organ_pipe_viewer_run_records_snapshots_and_probe_data(SolverKind::LaxWendroff);
+    }
+
+    #[test]
+    fn mac_cormack_organ_pipe_viewer_run_records_snapshots_and_probe_data() {
+        assert_organ_pipe_viewer_run_records_snapshots_and_probe_data(SolverKind::MacCormack);
     }
 }

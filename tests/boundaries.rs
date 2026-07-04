@@ -1,5 +1,6 @@
 use onedpipes::{
-    BoundaryCondition, ClosedEnd, Duct, DuctConfig, OpenEnd, State, TemperatureDependentAir,
+    BoundaryCondition, ClosedEnd, Duct, DuctConfig, OpenEnd, SolverKind, State,
+    TemperatureDependentAir,
 };
 
 fn right_going_pulse_state(
@@ -19,7 +20,7 @@ fn right_going_pulse_state(
     State::from_primitive(rho, u, base_p + dp, gas)
 }
 
-fn reflected_pressure_peak<R>(right_boundary: R) -> (f64, f64)
+fn reflected_pressure_peak<R>(solver: SolverKind, right_boundary: R) -> (f64, f64)
 where
     R: BoundaryCondition<TemperatureDependentAir> + Copy,
 {
@@ -35,6 +36,7 @@ where
     let probe_cell = ((probe_x / length) * cells as f64).floor() as usize;
     let config = DuctConfig {
         artificial_viscosity: 0.003,
+        solver,
         ..DuctConfig::new(length, cells, 1.0)
     };
     let mut duct = Duct::from_initializer(gas, config, ClosedEnd, right_boundary, |x| {
@@ -88,8 +90,9 @@ where
 }
 
 #[test]
-fn closed_end_reflects_pressure_pulse_with_same_sign() {
-    let (positive_peak, negative_peak) = reflected_pressure_peak(ClosedEnd);
+fn lax_wendroff_closed_end_reflects_pressure_pulse_with_same_sign() {
+    let (positive_peak, negative_peak) =
+        reflected_pressure_peak(SolverKind::LaxWendroff, ClosedEnd);
     assert!(
         positive_peak > 20.0,
         "closed end should return a positive pressure pulse, got {positive_peak}"
@@ -101,8 +104,36 @@ fn closed_end_reflects_pressure_pulse_with_same_sign() {
 }
 
 #[test]
-fn open_end_reflects_pressure_pulse_with_opposite_sign() {
-    let (positive_peak, negative_peak) = reflected_pressure_peak(OpenEnd::new(101_325.0));
+fn mac_cormack_closed_end_reflects_pressure_pulse_with_same_sign() {
+    let (positive_peak, negative_peak) = reflected_pressure_peak(SolverKind::MacCormack, ClosedEnd);
+    assert!(
+        positive_peak > 20.0,
+        "closed end should return a positive pressure pulse, got {positive_peak}"
+    );
+    assert!(
+        positive_peak > negative_peak.abs(),
+        "closed-end reflected pulse should be dominated by same-sign pressure"
+    );
+}
+
+#[test]
+fn lax_wendroff_open_end_reflects_pressure_pulse_with_opposite_sign() {
+    let (positive_peak, negative_peak) =
+        reflected_pressure_peak(SolverKind::LaxWendroff, OpenEnd::new(101_325.0));
+    assert!(
+        negative_peak < -20.0,
+        "open end should return a negative pressure pulse, got {negative_peak}"
+    );
+    assert!(
+        negative_peak.abs() > positive_peak,
+        "open-end reflected pulse should be dominated by inverted pressure"
+    );
+}
+
+#[test]
+fn mac_cormack_open_end_reflects_pressure_pulse_with_opposite_sign() {
+    let (positive_peak, negative_peak) =
+        reflected_pressure_peak(SolverKind::MacCormack, OpenEnd::new(101_325.0));
     assert!(
         negative_peak < -20.0,
         "open end should return a negative pressure pulse, got {negative_peak}"

@@ -1,5 +1,5 @@
 use eframe::egui;
-use onedpipes::{OrganPipeConfig, OrganPipeRun, ScalarField, Snapshot};
+use onedpipes::{OrganPipeConfig, OrganPipeRun, ScalarField, Snapshot, SolverKind};
 use plotters::prelude::*;
 
 const PLOT_W: u32 = 820;
@@ -80,6 +80,19 @@ impl eframe::App for ViewerApp {
             .show(ctx, |ui| {
                 ui.heading("Case");
                 ui.label("Closed-closed organ pipe");
+                ui.add_space(8.0);
+
+                ui.heading("Solver");
+                ui.radio_value(
+                    &mut self.config.solver,
+                    SolverKind::LaxWendroff,
+                    SolverKind::LaxWendroff.label(),
+                );
+                ui.radio_value(
+                    &mut self.config.solver,
+                    SolverKind::MacCormack,
+                    SolverKind::MacCormack.label(),
+                );
                 ui.add_space(8.0);
 
                 ui.heading("Run Controls");

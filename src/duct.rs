@@ -1,18 +1,22 @@
 use crate::{
     boundaries::{BoundaryCondition, DuctEnd},
     gas_properties::GasProperties,
+    solvers::{self, SolverKind},
     species::{SpeciesFractions, SpeciesMass},
     state::{Primitive, State},
 };
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct DuctConfig {
     pub length: f64,
     pub cells: usize,
     pub area: f64,
+    pub cell_areas: Vec<f64>,
+    pub face_areas: Vec<f64>,
     pub artificial_viscosity: f64,
     pub density_floor: f64,
     pub pressure_floor: f64,
+    pub solver: SolverKind,
 }
 
 impl DuctConfig {
@@ -24,14 +28,69 @@ impl DuctConfig {
             length,
             cells,
             area,
+            cell_areas: vec![area; cells],
+            face_areas: vec![area; cells + 1],
             artificial_viscosity: 0.02,
             density_floor: 1.0e-8,
             pressure_floor: 1.0,
+            solver: SolverKind::default(),
         }
     }
 
     pub fn dx(&self) -> f64 {
         self.length / self.cells as f64
+    }
+
+    pub fn with_area_profile<F>(length: f64, cells: usize, mut area_at_x: F) -> Self
+    where
+        F: FnMut(f64) -> f64,
+    {
+        let mut config = Self::new(length, cells, area_at_x(0.5 * length / cells as f64));
+        let dx = config.dx();
+        config.cell_areas = (0..cells)
+            .map(|i| area_at_x((i as f64 + 0.5) * dx))
+            .collect();
+        config.face_areas = (0..=cells).map(|i| area_at_x(i as f64 * dx)).collect();
+        config.validate_areas();
+        config.area = config.cell_areas.iter().sum::<f64>() / cells as f64;
+        config
+    }
+
+    pub fn cell_area(&self, index: usize) -> f64 {
+        self.cell_areas[index]
+    }
+
+    pub fn face_area(&self, index: usize) -> f64 {
+        self.face_areas[index]
+    }
+
+    pub fn area_gradient(&self, index: usize) -> f64 {
+        (self.face_areas[index + 1] - self.face_areas[index]) / self.dx()
+    }
+
+    pub fn has_variable_area(&self) -> bool {
+        self.cell_areas
+            .iter()
+            .any(|area| (*area - self.area).abs() > 1.0e-12 * self.area)
+            || self
+                .face_areas
+                .iter()
+                .any(|area| (*area - self.area).abs() > 1.0e-12 * self.area)
+    }
+
+    fn validate_areas(&self) {
+        assert_eq!(self.cell_areas.len(), self.cells);
+        assert_eq!(self.face_areas.len(), self.cells + 1);
+        assert!(
+            self.cell_areas
+                .iter()
+                .all(|area| area.is_finite() && *area > 0.0)
+        );
+        assert!(
+            self.face_areas
+                .iter()
+                .all(|area| area.is_finite() && *area > 0.0)
+        );
     }
 }
 
@@ -216,7 +275,7 @@ where
     }
 
     pub fn config(&self) -> DuctConfig {
-        self.config
+        self.config.clone()
     }
 
     pub fn cells(&self) -> &[State] {
@@ -267,14 +326,16 @@ where
     pub fn total_mass(&self) -> f64 {
         self.cells
             .iter()
-            .map(|state| state.rho * self.config.area * self.config.dx())
+            .enumerate()
+            .map(|(i, state)| state.rho * self.config.cell_area(i) * self.config.dx())
             .sum()
     }
 
     pub fn total_energy(&self) -> f64 {
         self.cells
             .iter()
-            .map(|state| state.rho_total_energy * self.config.area * self.config.dx())
+            .enumerate()
+            .map(|(i, state)| state.rho_total_energy * self.config.cell_area(i) * self.config.dx())
             .sum()
     }
 
@@ -326,77 +387,91 @@ where
         let extended = self.extended_states(left_boundary.ghost_state, right_boundary.ghost_state);
         let extended_species =
             self.extended_species(left_boundary.ghost_species, right_boundary.ghost_species);
-        let mut face_fluxes = Vec::with_capacity(self.cells.len() + 1);
-        let mut face_species_fluxes = Vec::with_capacity(self.cells.len() + 1);
-        let mut report = StepReport::default();
+        let old_cells = self.cells.clone();
+        let extended_areas = self.extended_areas();
+        let mut solver_output = match self.config.solver {
+            SolverKind::LaxWendroff => solvers::advance_lax_wendroff(
+                &old_cells,
+                &extended,
+                &self.config.cell_areas,
+                &extended_areas,
+                &self.config.face_areas,
+                lambda,
+                self.gas,
+                self.config.density_floor,
+                self.config.pressure_floor,
+            ),
+            SolverKind::MacCormack => solvers::advance_mac_cormack(
+                &old_cells,
+                &extended,
+                &self.config.cell_areas,
+                &extended_areas,
+                &self.config.face_areas,
+                lambda,
+                self.gas,
+                self.config.density_floor,
+                self.config.pressure_floor,
+                |predicted| {
+                    self.extended_states_for(
+                        predicted,
+                        left_boundary.ghost_state,
+                        right_boundary.ghost_state,
+                    )
+                },
+            ),
+        };
+        let mut report = StepReport {
+            clipped_cells: 0,
+            fallback_faces: solver_output.fallback_faces,
+            clipped_cell_indices: Vec::new(),
+            fallback_face_indices: solver_output.fallback_face_indices,
+            pipe_diagnostics: Vec::new(),
+            external_boundary_diagnostics: Vec::new(),
+        };
 
-        for face in 0..=self.cells.len() {
-            let left = extended[face];
-            let right = extended[face + 1];
-            if self.is_physical(left) && self.is_physical(right) {
-                let predicted = left.plus(right).scale(0.5).add_scaled(
-                    right.flux(self.gas).minus(left.flux(self.gas)),
-                    -0.5 * lambda,
-                );
-                if !self.is_physical(predicted) {
-                    report.fallback_faces += 1;
-                    report.fallback_face_indices.push(face);
-                    face_fluxes.push(self.rusanov_flux(left, right));
-                } else {
-                    face_fluxes.push(predicted.flux(self.gas));
-                }
-            } else {
-                report.fallback_faces += 1;
-                report.fallback_face_indices.push(face);
-                face_fluxes.push(self.rusanov_flux(left, right));
-            }
-            let mass_flux = face_fluxes[face].rho;
-            face_species_fluxes.push(upwind_species_flux(
-                mass_flux,
-                extended_species[face],
-                extended_species[face + 1],
-            ));
-        }
         if let Some(face_flux) = left_boundary.face_flux {
-            face_fluxes[0] = face_flux;
-            face_species_fluxes[0] = left_boundary.face_species_flux.unwrap_or_else(|| {
-                upwind_species_flux(face_flux.rho, extended_species[0], extended_species[1])
-            });
+            solver_output.face_fluxes[0] = face_flux.scale(self.config.face_area(0));
         }
         if let Some(face_flux) = right_boundary.face_flux {
             let right_face = self.cells.len();
-            face_fluxes[right_face] = face_flux;
-            face_species_fluxes[right_face] =
-                right_boundary.face_species_flux.unwrap_or_else(|| {
-                    upwind_species_flux(
-                        face_flux.rho,
-                        extended_species[right_face],
-                        extended_species[right_face + 1],
-                    )
-                });
+            solver_output.face_fluxes[right_face] =
+                face_flux.scale(self.config.face_area(right_face));
         }
 
-        let old_cells = self.cells.clone();
+        let face_species_fluxes: Vec<_> = (0..=self.cells.len())
+            .map(|face| {
+                let mass_flux = solver_output.face_fluxes[face].rho;
+                if face == 0 {
+                    if let Some(face_species_flux) = left_boundary.face_species_flux {
+                        return face_species_flux.scale(self.config.face_area(face));
+                    }
+                } else if face == self.cells.len() {
+                    if let Some(face_species_flux) = right_boundary.face_species_flux {
+                        return face_species_flux.scale(self.config.face_area(face));
+                    }
+                }
+                upwind_species_flux(
+                    mass_flux,
+                    extended_species[face],
+                    extended_species[face + 1],
+                )
+            })
+            .collect();
+
         let old_species_mass: Vec<_> = old_cells
             .iter()
             .zip(self.species.iter().copied())
             .map(|(state, species)| SpeciesMass::from_density(state.rho, species))
             .collect();
-        let mut next_cells = Vec::with_capacity(self.cells.len());
         let mut next_species_mass = Vec::with_capacity(self.cells.len());
         for i in 0..self.cells.len() {
-            let area_weighted_flux_delta = face_fluxes[i + 1]
-                .minus(face_fluxes[i])
-                .scale(self.config.area);
-            let next =
-                self.cells[i].add_scaled(area_weighted_flux_delta, -lambda / self.config.area);
-            next_cells.push(next);
             next_species_mass.push(
                 old_species_mass[i]
                     .add_scaled(face_species_fluxes[i + 1], -lambda)
                     .add_scaled(face_species_fluxes[i], lambda),
             );
         }
+        let mut next_cells = solver_output.cells;
 
         if self.config.artificial_viscosity > 0.0 {
             for i in 1..next_cells.len() - 1 {
@@ -424,18 +499,25 @@ where
     }
 
     fn extended_states(&self, left_ghost: Option<State>, right_ghost: Option<State>) -> Vec<State> {
+        self.extended_states_for(&self.cells, left_ghost, right_ghost)
+    }
+
+    fn extended_states_for(
+        &self,
+        cells: &[State],
+        left_ghost: Option<State>,
+        right_ghost: Option<State>,
+    ) -> Vec<State> {
+        debug_assert_eq!(cells.len(), self.cells.len());
         let mut extended = Vec::with_capacity(self.cells.len() + 2);
         extended.push(left_ghost.unwrap_or_else(|| {
             self.left_boundary
-                .ghost_state(self.cells[0], DuctEnd::Left, self.gas)
+                .ghost_state(cells[0], DuctEnd::Left, self.gas)
         }));
-        extended.extend_from_slice(&self.cells);
+        extended.extend_from_slice(cells);
         extended.push(right_ghost.unwrap_or_else(|| {
-            self.right_boundary.ghost_state(
-                self.cells[self.cells.len() - 1],
-                DuctEnd::Right,
-                self.gas,
-            )
+            self.right_boundary
+                .ghost_state(cells[cells.len() - 1], DuctEnd::Right, self.gas)
         }));
         extended
     }
@@ -452,14 +534,12 @@ where
         extended
     }
 
-    fn is_physical(&self, state: State) -> bool {
-        if !state.rho.is_finite() || state.rho <= self.config.density_floor {
-            return false;
-        }
-        let Ok(prim) = state.try_primitive(self.gas) else {
-            return false;
-        };
-        prim.p.is_finite() && prim.p > self.config.pressure_floor
+    fn extended_areas(&self) -> Vec<f64> {
+        let mut extended = Vec::with_capacity(self.cells.len() + 2);
+        extended.push(self.config.cell_areas[0]);
+        extended.extend_from_slice(&self.config.cell_areas);
+        extended.push(self.config.cell_areas[self.config.cell_areas.len() - 1]);
+        extended
     }
 
     fn enforce_positivity(&self, state: &mut State) -> bool {
@@ -479,17 +559,6 @@ where
             false
         }
     }
-
-    fn rusanov_flux(&self, left: State, right: State) -> State {
-        let left_prim = left.primitive_clamped(self.gas);
-        let right_prim = right.primitive_clamped(self.gas);
-        let wave_speed = (left_prim.u.abs() + left_prim.sound_speed)
-            .max(right_prim.u.abs() + right_prim.sound_speed);
-        left.flux_clamped(self.gas)
-            .plus(right.flux_clamped(self.gas))
-            .scale(0.5)
-            .add_scaled(right.minus(left), -0.5 * wave_speed)
-    }
 }
 
 fn upwind_species_flux(
@@ -507,19 +576,19 @@ fn upwind_species_flux(
 #[cfg(test)]
 mod tests {
     use super::{BoundaryOverride, Duct, DuctConfig};
-    use crate::{boundaries::ClosedEnd, gas_properties::TemperatureDependentAir, state::State};
+    use crate::{
+        boundaries::ClosedEnd, gas_properties::TemperatureDependentAir, solvers::SolverKind,
+        state::State,
+    };
 
-    #[test]
-    fn uniform_closed_duct_remains_uniform() {
+    fn assert_uniform_closed_duct_remains_uniform(solver: SolverKind) {
         let gas = TemperatureDependentAir::new();
         let state = State::from_primitive(1.2, 0.0, 101_325.0, gas);
-        let mut duct = Duct::new(
-            gas,
-            DuctConfig::new(1.0, 32, 1.0),
-            state,
-            ClosedEnd,
-            ClosedEnd,
-        );
+        let config = DuctConfig {
+            solver,
+            ..DuctConfig::new(1.0, 32, 1.0)
+        };
+        let mut duct = Duct::new(gas, config, state, ClosedEnd, ClosedEnd);
         let dt = 0.4 * duct.config().dx() / duct.max_signal_speed();
         let report = duct.step(dt);
         assert_eq!(report.clipped_cells, 0);
@@ -602,16 +671,23 @@ mod tests {
     }
 
     #[test]
-    fn unphysical_predictor_uses_fallback_flux() {
+    fn lax_wendroff_uniform_closed_duct_remains_uniform() {
+        assert_uniform_closed_duct_remains_uniform(SolverKind::LaxWendroff);
+    }
+
+    #[test]
+    fn mac_cormack_uniform_closed_duct_remains_uniform() {
+        assert_uniform_closed_duct_remains_uniform(SolverKind::MacCormack);
+    }
+
+    fn assert_unphysical_predictor_uses_fallback_flux(solver: SolverKind) {
         let gas = TemperatureDependentAir::new();
         let state = State::from_primitive(1.2, 0.0, 101_325.0, gas);
-        let mut duct = Duct::new(
-            gas,
-            DuctConfig::new(1.0, 8, 1.0),
-            state,
-            ClosedEnd,
-            ClosedEnd,
-        );
+        let config = DuctConfig {
+            solver,
+            ..DuctConfig::new(1.0, 8, 1.0)
+        };
+        let mut duct = Duct::new(gas, config, state, ClosedEnd, ClosedEnd);
         let bad_state = State {
             rho: -1.2,
             momentum: 0.0,
@@ -622,5 +698,15 @@ mod tests {
         let report = duct.step(1.0e-6);
         assert!(report.fallback_faces > 0);
         assert!(report.clipped_cells > 0);
+    }
+
+    #[test]
+    fn lax_wendroff_unphysical_predictor_uses_fallback_flux() {
+        assert_unphysical_predictor_uses_fallback_flux(SolverKind::LaxWendroff);
+    }
+
+    #[test]
+    fn mac_cormack_unphysical_predictor_uses_fallback_flux() {
+        assert_unphysical_predictor_uses_fallback_flux(SolverKind::MacCormack);
     }
 }
